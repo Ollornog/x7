@@ -1,5 +1,14 @@
 # Sound Blaster X7 on Linux
 
+> **How this was made.** The code was written with Claude (Opus 5.5 and
+> Fable 5.1) with a person at the keyboard directing, testing and
+> reviewing. The protocol was not guessed: every command came from a USB
+> capture of Creative's Windows control panel, was replayed against a
+> real X7 on Linux, and its effect was checked by that person on the
+> device, by ear or on the value read back. This is an independent
+> project with no involvement from Creative; Sound Blaster is their
+> trademark.
+
 The Creative Sound Blaster X7 is a USB DAC and headphone amplifier with
 speaker outputs. Its audio works on Linux out of the box, but every
 setting the Windows control panel offers is reached over a USB HID
@@ -134,8 +143,14 @@ The installer works as is: the binaries go to your home directory, and
 ## Using it
 
 The tray icon shows the active output. Its menu switches between
-Headphones and Speakers, opens the controls window, and quits. The
-window has six pages:
+Headphones and Speakers, toggles SBX and Scout Mode, opens the controls
+window, and quits.
+
+<p align="center">
+  <img src="docs/images/tray.png" width="428" alt="The tray menu: Headphones, Speakers, SBX, Scout Mode, Open controls, Quit">
+</p>
+
+The window has six pages:
 
 - SBX: the SBX Pro Studio master switch and its effects (Surround,
   Dialog Plus, Smart Volume, Crystalizer, Bass with its crossover), plus
