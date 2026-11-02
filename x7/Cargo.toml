@@ -1,0 +1,12 @@
+[package]
+name = "x7"
+version = "0.1.0"
+edition = "2024"
+description = "Control a Creative Sound Blaster X7 from Linux"
+license = "MIT"
+
+[dependencies]
+nix = { version = "0.31", features = ["poll", "signal"] }
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+toml = { version = "1", features = ["preserve_order"] }

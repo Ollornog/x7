@@ -1,0 +1,53 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # The image sets the glibc floor (2.35). A runner image would be
+    # retired one day; this pin does not move.
+    container: ubuntu:22.04
+    steps:
+      - name: Build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            curl ca-certificates build-essential musl-tools pkg-config file git
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch, 2026-10
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - name: Package
+        run: sh dist/package.sh "${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tarball
+          path: |
+            target/package/*.tar.gz
+            target/package/*.tar.gz.sha256
+          if-no-files-found: error
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # A named download lands in `path` itself; unnamed, v4 nests each
+      # artifact in its own directory and the globs below miss.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tarball
+          path: .
+      - name: Create the GitHub Release
+        # No checkout in this job, so gh needs the repository and token.
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$TAG" x7-*.tar.gz x7-*.tar.gz.sha256 --title "$TAG" --generate-notes

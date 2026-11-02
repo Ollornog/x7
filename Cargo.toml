@@ -1,0 +1,3 @@
+[workspace]
+members = ["x7", "x7-gui"]
+resolver = "3"

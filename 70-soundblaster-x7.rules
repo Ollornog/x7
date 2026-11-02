@@ -1,0 +1,4 @@
+# Sound Blaster X7 (041e:323a): let local users talk to the HID control
+# interface and the USB device node without root.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="041e", ATTRS{idProduct}=="323a", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="041e", ATTR{idProduct}=="323a", TAG+="uaccess"

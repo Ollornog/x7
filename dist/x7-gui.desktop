@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Sound Blaster X7
+Comment=Output, SBX and CrystalVoice controls for the Creative Sound Blaster X7
+Exec=x7-gui
+Icon=audio-headphones
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=Creative;Sound Blaster;X7;headphones;speakers;SBX;
+StartupWMClass=x7-gui
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
