@@ -60,9 +60,11 @@ at runtime are on every desktop.
 
 GNOME needs the AppIndicator extension (`ubuntu-appindicators@ubuntu.com`
 on Ubuntu, "AppIndicator and KStatusNotifierItem Support" elsewhere) for
-the tray icon. The app copes with the extension loading after it does:
-without a tray host the window opens and closing it quits; once a host
-appears, closing puts the app back in the tray.
+the tray icon. The extension loads after autostarted apps, so the
+autostart entry passes `--autostart`: the app then waits for a tray host
+instead of opening its window. Started by hand without a tray host, the
+window opens and closing it quits; once a host appears, closing puts the
+app back in the tray.
 
 ### Hyprland (Omarchy)
 
@@ -76,7 +78,7 @@ session has:
 - Plain Hyprland without UWSM: no XDG autostart, so add to `hyprland.conf`:
 
   ```
-  exec-once = x7-gui
+  exec-once = x7-gui --autostart
   ```
 
 The controls window is 440 px wide and is meant to float. Hyprland's rule

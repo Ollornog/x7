@@ -31,6 +31,9 @@ pub struct X7Tray {
     /// True while a StatusNotifier host shows our item. The window reads it
     /// to decide whether closing leaves the app here or must quit.
     pub tray_ok: Arc<AtomicBool>,
+    /// Started by the session's autostart entry: a missing host is the
+    /// GNOME extension still loading, so wait for it, never open a window.
+    pub autostart: bool,
 }
 
 impl X7Tray {
@@ -79,10 +82,14 @@ impl ksni::Tray for X7Tray {
     }
 
     /// No host, or it went away: a closed window could not be reopened, so
-    /// open one and let closing quit. Returning true keeps ksni retrying.
+    /// open one and let closing quit. Under autostart the host is on its
+    /// way; the tray icon or a second launch opens the window later.
+    /// Returning true keeps ksni retrying.
     fn watcher_offline(&self, _reason: ksni::OfflineReason) -> bool {
         self.tray_ok.store(false, Ordering::Relaxed);
-        self.wake.show();
+        if !self.autostart {
+            self.wake.show();
+        }
         true
     }
 
@@ -158,6 +165,46 @@ impl ksni::Tray for X7Tray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ksni::Tray;
+    use std::sync::mpsc::{Receiver, TryRecvError};
+    use std::time::Duration;
+
+    fn tray(autostart: bool) -> (X7Tray, Receiver<()>) {
+        let (wake, rx) = Wake::new();
+        let session = Session::start_with_opener(
+            Box::new(|| Err(x7::Error::NoDevice)),
+            Duration::from_secs(3600),
+            Box::new(|| {}),
+        );
+        let tray = X7Tray {
+            session: Arc::new(session),
+            wake,
+            quit: Arc::new(AtomicBool::new(false)),
+            tray_ok: Arc::new(AtomicBool::new(true)),
+            autostart,
+        };
+        (tray, rx)
+    }
+
+    #[test]
+    fn offline_opens_the_window_only_outside_autostart() {
+        let (by_hand, rx) = tray(false);
+        assert!(by_hand.watcher_offline(ksni::OfflineReason::No));
+        assert_eq!(rx.try_recv(), Ok(()), "no host by hand: the window opens");
+        assert!(!by_hand.tray_ok.load(Ordering::Relaxed));
+
+        let (at_login, rx) = tray(true);
+        assert!(
+            at_login.watcher_offline(ksni::OfflineReason::No),
+            "keeps retrying"
+        );
+        assert_eq!(
+            rx.try_recv(),
+            Err(TryRecvError::Empty),
+            "autostart waits for the host"
+        );
+        assert!(!at_login.tray_ok.load(Ordering::Relaxed));
+    }
 
     #[test]
     fn embedded_icons_are_22x22_argb() {

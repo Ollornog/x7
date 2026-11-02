@@ -134,9 +134,14 @@ main() {
   exec_path=$(printf '%s' "$bin_dir/x7-gui" | sed 's/\\/\\\\\\\\/g; s/["$`]/\\\\&/g')
   { grep -v '^Exec=' "$payload_dir/x7-gui.desktop"; printf 'Exec="%s"\n' "$exec_path"; } >"$app_dir/x7-gui.desktop"
   chmod 644 "$app_dir/x7-gui.desktop"
+  # The autostart copy passes --autostart: started before the tray host is
+  # up (GNOME loads its extension after autostarted apps), the app waits
+  # for the host instead of opening its window.
   if [ "$autostart" = 1 ]; then
     say "autostart: $autostart_dir/x7-gui.desktop"
-    install -Dm644 "$app_dir/x7-gui.desktop" "$autostart_dir/x7-gui.desktop"
+    mkdir -p "$autostart_dir"
+    { grep -v '^Exec=' "$app_dir/x7-gui.desktop"; printf 'Exec="%s" --autostart\n' "$exec_path"; } >"$autostart_dir/x7-gui.desktop"
+    chmod 644 "$autostart_dir/x7-gui.desktop"
   else
     say "autostart: skipped (--no-autostart)"
     rm -f "$autostart_dir/x7-gui.desktop"

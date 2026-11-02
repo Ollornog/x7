@@ -22,6 +22,13 @@ cp "$root/install.sh" "$payload/install.sh"
 home=$work/home
 udev=$work/udev
 mkdir -p "$home" "$udev"
+# A pgrep that finds nothing: the checks below are about a machine with no
+# x7-gui running, whatever is running here.
+mkdir -p "$work/stub"
+printf '#!/bin/sh\nexit 1\n' > "$work/stub/pgrep"
+chmod 755 "$work/stub/pgrep"
+PATH=$work/stub:$PATH
+export PATH
 # setsid: no controlling terminal, so the udev prompt must not block.
 # No DISPLAY: the installer must not start the tray from here.
 run() { ( cd "$work" && HOME=$home X7_UDEV_DIR=$udev env -u DISPLAY -u WAYLAND_DISPLAY setsid -w sh "$@" ) </dev/null >"$work/out" 2>&1 || { cat "$work/out"; fail "install.sh exited non-zero: $*"; }; }
@@ -34,8 +41,8 @@ run "$payload/install.sh"
 [ -f "$home/.config/autostart/x7-gui.desktop" ] || fail "autostart entry missing (default on)"
 # systemd's xdg-autostart generator resolves a bare Exec= against the
 # service manager's PATH, which lacks ~/.local/bin at login: both copies
-# must name the binary by absolute path.
-has "$home/.config/autostart/x7-gui.desktop" "^Exec=\"$home/.local/bin/x7-gui\"$"
+# must name the binary by absolute path. The autostart copy adds --autostart.
+has "$home/.config/autostart/x7-gui.desktop" "^Exec=\"$home/.local/bin/x7-gui\" --autostart$"
 has "$home/.local/share/applications/x7-gui.desktop" "^Exec=\"$home/.local/bin/x7-gui\"$"
 
 echo "1b a home with a space, an ampersand and a dollar sign: Exec is quoted and escaped"
@@ -44,7 +51,7 @@ mkdir -p "$odd"
 ( cd "$work" && HOME=$odd X7_UDEV_DIR=$udev setsid -w sh "$payload/install.sh" ) </dev/null >"$work/out-odd" 2>&1 || { cat "$work/out-odd"; fail "install into the odd home exited non-zero"; }
 # Two escaping layers, Desktop Entry value then Exec argument: $ becomes \\$.
 # shellcheck disable=SC2016
-grep -qF 'Exec="'"$work"'/ho me&\\$x/.local/bin/x7-gui"' "$odd/.config/autostart/x7-gui.desktop" || fail "Exec not quoted and escaped: $(grep '^Exec=' "$odd/.config/autostart/x7-gui.desktop")"
+grep -qF 'Exec="'"$work"'/ho me&\\$x/.local/bin/x7-gui" --autostart' "$odd/.config/autostart/x7-gui.desktop" || fail "Exec not quoted and escaped: $(grep '^Exec=' "$odd/.config/autostart/x7-gui.desktop")"
 gen=/usr/lib/systemd/user-generators/systemd-xdg-autostart-generator
 if [ -x "$gen" ]; then
   mkdir -p "$work/gen"
@@ -60,13 +67,9 @@ has "$work/out" "the tray icon appears at next login"
 lacks "$work/out" "x7-gui started"
 
 echo "1c with a display, the tray is started at the end"
-if command -v pgrep >/dev/null 2>&1 && pgrep -x x7-gui >/dev/null 2>&1; then
-  echo "  (an x7-gui is running on this machine; the start check is skipped)"
-else
-  ( cd "$work" && HOME=$home X7_UDEV_DIR=$udev DISPLAY=:99 setsid -w sh "$payload/install.sh" ) </dev/null >"$work/out" 2>&1 || { cat "$work/out"; fail "install with a display exited non-zero"; }
-  has "$work/out" "x7-gui started"
-  lacks "$work/out" "the tray icon appears at next login"
-fi
+( cd "$work" && HOME=$home X7_UDEV_DIR=$udev DISPLAY=:99 setsid -w sh "$payload/install.sh" ) </dev/null >"$work/out" 2>&1 || { cat "$work/out"; fail "install with a display exited non-zero"; }
+has "$work/out" "x7-gui started"
+lacks "$work/out" "the tray icon appears at next login"
 
 echo "2 PATH without ~/.local/bin warns"
 ( cd "$work" && HOME=$home X7_UDEV_DIR=$udev PATH=/usr/bin:/bin setsid -w sh "$payload/install.sh" ) </dev/null >"$work/out" 2>&1

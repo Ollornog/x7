@@ -31,26 +31,31 @@ enum Mode {
     Absent,
 }
 
-/// What the arguments ask for.
+/// What the arguments ask for. `autostart` is for the session's autostart
+/// entry: stay in the tray and never open a window on your own, so a start
+/// before the tray host is up (GNOME loads its extension after autostarted
+/// apps) waits for the host instead of opening the window at login.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Launch {
-    Run(Mode),
+    Run { mode: Mode, autostart: bool },
     Version,
 }
 
-const USAGE: &str = "usage: x7-gui [--fake | --fake=absent | --version]";
+const USAGE: &str = "usage: x7-gui [--fake | --fake=absent] [--autostart] [--version]";
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Launch, String> {
     let mut mode = Mode::Real;
+    let mut autostart = false;
     for arg in args {
-        mode = match arg.as_str() {
-            "--fake" => Mode::Fake,
-            "--fake=absent" => Mode::Absent,
+        match arg.as_str() {
+            "--fake" => mode = Mode::Fake,
+            "--fake=absent" => mode = Mode::Absent,
+            "--autostart" => autostart = true,
             "--version" => return Ok(Launch::Version),
             other => return Err(format!("x7-gui: unknown argument {other}\n{USAGE}")),
-        };
+        }
     }
-    Ok(Launch::Run(mode))
+    Ok(Launch::Run { mode, autostart })
 }
 
 fn start_session(mode: Mode, on_change: Box<dyn Fn() + Send>) -> Session {
@@ -67,8 +72,8 @@ fn start_session(mode: Mode, on_change: Box<dyn Fn() + Send>) -> Session {
 }
 
 fn main() -> eframe::Result {
-    let mode = match parse_args(std::env::args().skip(1)) {
-        Ok(Launch::Run(mode)) => mode,
+    let (mode, autostart) = match parse_args(std::env::args().skip(1)) {
+        Ok(Launch::Run { mode, autostart }) => (mode, autostart),
         Ok(Launch::Version) => {
             println!("x7-gui {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
@@ -127,6 +132,7 @@ fn main() -> eframe::Result {
         wake: wake.clone(),
         quit: quit.clone(),
         tray_ok: tray_ok.clone(),
+        autostart,
     };
     // A missing host is temporary (GNOME loads its extension after
     // autostarted apps); ksni then reports it through watcher_offline
@@ -214,13 +220,39 @@ mod tests {
         parse_args(args.iter().map(|a| a.to_string()))
     }
 
+    fn run(mode: Mode) -> Launch {
+        Launch::Run {
+            mode,
+            autostart: false,
+        }
+    }
+
     #[test]
     fn the_fake_flag_picks_the_mode_and_anything_else_is_refused() {
-        assert_eq!(parse(&[]), Ok(Launch::Run(Mode::Real)));
-        assert_eq!(parse(&["--fake"]), Ok(Launch::Run(Mode::Fake)));
-        assert_eq!(parse(&["--fake=absent"]), Ok(Launch::Run(Mode::Absent)));
+        assert_eq!(parse(&[]), Ok(run(Mode::Real)));
+        assert_eq!(parse(&["--fake"]), Ok(run(Mode::Fake)));
+        assert_eq!(parse(&["--fake=absent"]), Ok(run(Mode::Absent)));
         let err = parse(&["--fake=loud"]).unwrap_err();
         assert!(err.contains("--fake=loud") && err.contains(USAGE), "{err}");
+    }
+
+    #[test]
+    fn autostart_is_a_flag_beside_the_mode() {
+        assert_eq!(
+            parse(&["--autostart"]),
+            Ok(Launch::Run {
+                mode: Mode::Real,
+                autostart: true
+            })
+        );
+        assert_eq!(
+            parse(&["--fake", "--autostart"]),
+            Ok(Launch::Run {
+                mode: Mode::Fake,
+                autostart: true
+            })
+        );
+        assert!(USAGE.contains("--autostart"));
     }
 
     #[test]
