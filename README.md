@@ -44,7 +44,9 @@ The installer puts `x7` and `x7-gui` in `~/.local/bin`, adds a launcher
 entry and an autostart entry (`--no-autostart` skips the latter), and
 asks before running the two `sudo` lines that install the udev rule, the
 one root step; without the rule the device node is root-only. Unplug and
-replug the X7 afterwards. Run the same command again to update.
+replug the X7 afterwards. The tray icon comes up at the end of the
+install. Run the same command again to update, then Quit the tray and
+start it again.
 `install.sh --uninstall` removes everything it installed and leaves your
 profiles in `~/.config/x7/`.
 

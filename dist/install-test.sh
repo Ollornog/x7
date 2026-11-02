@@ -23,7 +23,8 @@ home=$work/home
 udev=$work/udev
 mkdir -p "$home" "$udev"
 # setsid: no controlling terminal, so the udev prompt must not block.
-run() { ( cd "$work" && HOME=$home X7_UDEV_DIR=$udev setsid -w sh "$@" ) </dev/null >"$work/out" 2>&1 || { cat "$work/out"; fail "install.sh exited non-zero: $*"; }; }
+# No DISPLAY: the installer must not start the tray from here.
+run() { ( cd "$work" && HOME=$home X7_UDEV_DIR=$udev env -u DISPLAY -u WAYLAND_DISPLAY setsid -w sh "$@" ) </dev/null >"$work/out" 2>&1 || { cat "$work/out"; fail "install.sh exited non-zero: $*"; }; }
 
 echo "1 install from the payload, by absolute path, from another directory"
 run "$payload/install.sh"
@@ -55,6 +56,17 @@ fi
 has "$work/out" "sudo install -m 644 \"$home/.local/share/x7/70-soundblaster-x7.rules\" $udev/"
 has "$work/out" "sudo udevadm control --reload"
 has "$work/out" "installed x7-gui 0.0.0"
+has "$work/out" "the tray icon appears at next login"
+lacks "$work/out" "x7-gui started"
+
+echo "1c with a display, the tray is started at the end"
+if command -v pgrep >/dev/null 2>&1 && pgrep -x x7-gui >/dev/null 2>&1; then
+  echo "  (an x7-gui is running on this machine; the start check is skipped)"
+else
+  ( cd "$work" && HOME=$home X7_UDEV_DIR=$udev DISPLAY=:99 setsid -w sh "$payload/install.sh" ) </dev/null >"$work/out" 2>&1 || { cat "$work/out"; fail "install with a display exited non-zero"; }
+  has "$work/out" "x7-gui started"
+  lacks "$work/out" "the tray icon appears at next login"
+fi
 
 echo "2 PATH without ~/.local/bin warns"
 ( cd "$work" && HOME=$home X7_UDEV_DIR=$udev PATH=/usr/bin:/bin setsid -w sh "$payload/install.sh" ) </dev/null >"$work/out" 2>&1

@@ -70,6 +70,9 @@ main() {
         sudo rm "$udev_dir/$rule" && sudo udevadm control --reload
       fi
     fi
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x x7-gui >/dev/null 2>&1; then
+      say "x7-gui is still running; Quit it from the tray"
+    fi
     say "done; profiles in ~/.config/x7 were left alone"
     exit 0
   fi
@@ -151,7 +154,18 @@ main() {
   fi
 
   say "installed $("$bin_dir/x7-gui" --version)"
-  say "the tray icon appears at next login, or now with: x7-gui &"
+  # Start the tray now when a desktop session is here. One runs per
+  # session: a second launch only asks the running one to show its window,
+  # so an update says to restart it instead. Started before the replug it
+  # shows "not connected" and picks the device up by itself.
+  if command -v pgrep >/dev/null 2>&1 && pgrep -x x7-gui >/dev/null 2>&1; then
+    say "x7-gui is running; Quit it from the tray and start it again to pick up the update"
+  elif [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    (setsid "$bin_dir/x7-gui" >/dev/null 2>&1 </dev/null &)
+    say "x7-gui started; the tray icon is up"
+  else
+    say "the tray icon appears at next login, or now with: x7-gui &"
+  fi
 }
 
 main "$@"
