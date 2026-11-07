@@ -26,7 +26,11 @@ kernel audio driver, in code or in tests. The reason is in
   quoted path; systemd's autostart generator needs that. Keep
   `dist/x7-gui.desktop` with the bare name for system-wide packages.
 - `dist/omarchy/io.github.stamrin.x7/` is the Omarchy bar widget the
-  installer places with `--bar=center-end`. It draws x7-gui's own tray
-  item (SNI id `x7`); keep that id stable. `AGENTS.md` is the install
+  installer places with `--bar=center-end`: a bar icon plus a popup with
+  every control, which reads and writes through the `x7` CLI, so CLI
+  output and argument forms are its interface. It is shown while
+  x7-gui's tray item (SNI id `x7`) exists; keep that id stable.
+  `node dist/omarchy/model-test.js` tests its parsing. The shell does not
+  hot-reload a live widget: `omarchy restart shell` after editing it. `AGENTS.md` is the install
   guide for agents and lists every installer flag; update it with them.
 - No emoji in code, commits, docs or PRs.

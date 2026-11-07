@@ -1,6 +1,6 @@
 [package]
 name = "x7"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "Control a Creative Sound Blaster X7 from Linux"
 license = "MIT"

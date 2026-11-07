@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.stamrin.x7",
   "name": "Sound Blaster X7",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Stamrin",
   "license": "MIT",
-  "description": "The x7-gui tray icon as its own bar widget, outside the tray drawer.",
+  "description": "The Sound Blaster X7 in the Omarchy bar: the active output, and a popup with every control.",
   "homepage": "https://github.com/Stamrin/x7",
   "kinds": [
     "bar-widget"
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "Sound Blaster X7",
-    "description": "Active output; left click opens the controls, right click the tray menu.",
+    "description": "Active output; a click opens the controls, a middle click the full window.",
     "category": "Status",
     "allowMultiple": false,
     "defaultSection": "centerEnd"

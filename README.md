@@ -93,11 +93,26 @@ session has:
   exec-once = x7-gui --autostart
   ```
 
-On Omarchy, `install.sh --float` writes the float rule for you, to
-`~/.config/hypr/x7.lua`, and `--bar=center-end` installs a bar widget
-(`io.github.stamrin.x7`, from `dist/omarchy/`) that shows the icon right
-of the clock instead of in the tray drawer. The rest of this section is
-for doing it by hand, or on plain Hyprland.
+On Omarchy, `--bar=center-end` installs a bar widget
+(`io.github.stamrin.x7`, from `dist/omarchy/`) right of the clock, in
+place of the tray icon. A click on it opens a popup like the other bar
+panels with all of the controls: the output, and pages for SBX (with
+Scout Mode), the equalizer, headphones, speakers and CrystalVoice, plus
+your saved profiles. It reads and writes the device through `x7`. Left
+and Right walk the pages, Escape closes it, a middle click opens the
+full window. To open it from the keyboard, on a page if you like:
+
+```lua
+o.bind("SUPER + ALT + X", "Sound Blaster X7", "omarchy-shell io.github.stamrin.x7 toggle")
+```
+
+```sh
+omarchy-shell io.github.stamrin.x7 showPage eq   # sbx, eq, headphones, speakers, voice
+```
+
+`install.sh --float` writes the float rule for the full window, to
+`~/.config/hypr/x7.lua`. The rest of this section is for doing it by
+hand, or on plain Hyprland.
 
 The controls window is 440 px wide and is meant to float. Hyprland's rule
 syntax has changed several times; check `hyprctl version` and use the form

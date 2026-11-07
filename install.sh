@@ -264,6 +264,14 @@ main() {
   if is_omarchy; then
     if [ -d "$payload_dir/omarchy/$plugin_id" ]; then
       say "Omarchy bar widget: $plugin_dir"
+      # The shell keeps a loaded widget's old code until it restarts, so
+      # note whether this run changes the files of one already there.
+      changed=0
+      if [ -d "$plugin_dir" ]; then
+        for f in "$payload_dir/omarchy/$plugin_id/"*; do
+          cmp -s "$f" "$plugin_dir/${f##*/}" || changed=1
+        done
+      fi
       mkdir -p "$plugin_dir"
       cp "$payload_dir/omarchy/$plugin_id/"* "$plugin_dir/"
       [ -n "$bar" ] || bar=$(saved bar)
@@ -273,6 +281,10 @@ main() {
       if [ -n "$bar" ]; then
         place_icon "$bar"
         save bar "$bar"
+        if [ "$changed" = 1 ] && [ "$bar" = center-end ] && omarchy-shell shell ping >/dev/null 2>&1; then
+          say "  updated; restarting the Omarchy shell to load it"
+          omarchy restart shell >/dev/null 2>&1 || say "  restart failed; run: omarchy restart shell"
+        fi
       else
         say "  not placed; install.sh --bar=center-end puts it right of the clock"
       fi

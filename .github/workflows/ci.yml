@@ -21,3 +21,4 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: shellcheck install.sh dist/package.sh dist/install-test.sh
       - run: sh dist/install-test.sh .
+      - run: node dist/omarchy/model-test.js

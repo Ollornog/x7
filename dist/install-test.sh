@@ -195,6 +195,17 @@ omrun "$payload/install.sh"
 [ "$(cat "$work/hidden")" = '["steam","x7"]' ] || fail "tray hidden list changed: $(cat "$work/hidden")"
 has "$work/out" "right of the clock"
 
+echo "10c2 an update that changes the widget restarts the shell; one that does not, does not"
+lacks "$work/omarchy.log" "restart shell"
+printf '// changed\n' >> "$om/.config/omarchy/plugins/io.github.stamrin.x7/Panel.qml"
+omrun "$payload/install.sh"
+has "$work/omarchy.log" "restart shell"
+has "$work/out" "restarting the Omarchy shell"
+: > "$work/omarchy.log"
+omrun "$payload/install.sh"
+lacks "$work/omarchy.log" "restart shell"
+cmp -s "$payload/omarchy/io.github.stamrin.x7/Panel.qml" "$om/.config/omarchy/plugins/io.github.stamrin.x7/Panel.qml" || fail "widget not updated"
+
 echo "10d --bar=tray --no-float undoes both and keeps the rest"
 omrun "$payload/install.sh" --bar=tray --no-float
 has "$work/omarchy.log" "plugin disable io.github.stamrin.x7"

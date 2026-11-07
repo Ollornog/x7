@@ -48,7 +48,10 @@ To change one, run the installer again with the new flag.
   `centerEnd` section, and adds `"x7"` to `omarchy.tray`'s `hidden` list
   so the icon does not also show in the drawer. Both steps go through
   the running Omarchy shell. If the shell is not running, the installer
-  prints the command to run later.
+  prints the command to run later. A click on the widget opens a popup
+  with all of the controls. When an update changes the widget's files,
+  the installer restarts the Omarchy shell, because the shell keeps
+  running a loaded widget's old code until it restarts.
 - `--bar=tray` disables the widget and removes `"x7"` from the tray's
   hidden list again.
 - `--float` writes `~/.config/hypr/x7.lua` (one `o.window` rule) and adds
