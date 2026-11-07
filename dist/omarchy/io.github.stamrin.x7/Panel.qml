@@ -71,7 +71,7 @@ Panel {
     queue = queue.concat([Model.command(x7, group, name, v)])
     pump()
   }
-  function toggle(group, name) { set(group, name, isOn(group, name) ? "off" : "on") }
+  function flip(group, name) { set(group, name, isOn(group, name) ? "off" : "on") }
   function pump() {
     if (writeProc.running || queue.length === 0) return
     writeProc.command = queue[0]
@@ -465,7 +465,7 @@ Panel {
       anchors.verticalCenter: parent.verticalCenter
       checked: root.isOn(sw.group, sw.name)
       foreground: root.fg
-      onToggled: root.toggle(sw.group, sw.name)
+      onToggled: root.flip(sw.group, sw.name)
     }
   }
 
