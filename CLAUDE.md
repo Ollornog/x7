@@ -25,4 +25,8 @@ kernel audio driver, in code or in tests. The reason is in
 - Desktop entries the installer writes name the binary by absolute,
   quoted path; systemd's autostart generator needs that. Keep
   `dist/x7-gui.desktop` with the bare name for system-wide packages.
+- `dist/omarchy/io.github.stamrin.x7/` is the Omarchy bar widget the
+  installer places with `--bar=center-end`. It draws x7-gui's own tray
+  item (SNI id `x7`); keep that id stable. `AGENTS.md` is the install
+  guide for agents and lists every installer flag; update it with them.
 - No emoji in code, commits, docs or PRs.

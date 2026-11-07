@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.stamrin.x7",
+  "name": "Sound Blaster X7",
+  "version": "1.0.0",
+  "author": "Stamrin",
+  "license": "MIT",
+  "description": "The x7-gui tray icon as its own bar widget, outside the tray drawer.",
+  "homepage": "https://github.com/Stamrin/x7",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Sound Blaster X7",
+    "description": "Active output; left click opens the controls, right click the tray menu.",
+    "category": "Status",
+    "allowMultiple": false,
+    "defaultSection": "centerEnd"
+  }
+}

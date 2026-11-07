@@ -3,14 +3,16 @@
 # binaries, a launcher entry, an autostart entry, and the udev rule (the
 # one root step, run only after you say yes). Run it from an unpacked
 # release tarball, or on its own to fetch the latest release. Running it
-# again updates. `--uninstall` reverses it.
+# again updates. `--uninstall` reverses it. On Omarchy it also asks where
+# the bar icon goes and whether the controls window floats; --bar and
+# --float/--no-float answer in advance, and the answers are remembered.
 set -eu
 
 # Everything runs from main, called on the last line: a download cut
 # short under `curl ... | sh` then runs nothing at all.
 main() {
 
-  usage='usage: install.sh [--no-autostart] [--uninstall]'
+  usage='usage: install.sh [--no-autostart] [--bar=center-end|tray] [--float|--no-float] [--uninstall]'
   repo=${X7_REPO:-Stamrin/x7}
   releases_url=${X7_RELEASES_URL:-https://api.github.com/repos/$repo/releases/latest}
   udev_dir=${X7_UDEV_DIR:-/etc/udev/rules.d}
@@ -21,13 +23,24 @@ main() {
   # A durable copy of the rule, so the printed sudo line still works after
   # a downloaded payload is cleaned up.
   share_dir=$HOME/.local/share/x7
+  # Omarchy only: the bar widget plugin, the Hyprland rule file, and the
+  # answers given, so an update does not ask again.
+  plugin_id=io.github.stamrin.x7
+  plugin_dir=$HOME/.config/omarchy/plugins/$plugin_id
+  hypr_dir=$HOME/.config/hypr
+  choices=$share_dir/omarchy.conf
 
   autostart=1
   uninstall=0
+  bar=
+  float=
   for arg in "$@"; do
     case $arg in
       --no-autostart) autostart=0 ;;
       --uninstall) uninstall=1 ;;
+      --bar=center-end | --bar=tray) bar=${arg#--bar=} ;;
+      --float) float=yes ;;
+      --no-float) float=no ;;
       -h | --help) echo "$usage"; exit 0 ;;
       *) echo "install.sh: unknown argument $arg" >&2; echo "$usage" >&2; exit 2 ;;
     esac
@@ -59,10 +72,97 @@ main() {
     return 1
   }
 
+  # Omarchy: its CLI on PATH and its config in this home.
+  is_omarchy() { command -v omarchy >/dev/null 2>&1 && [ -d "$HOME/.config/omarchy" ]; }
+
+  saved() { if [ -f "$choices" ]; then sed -n "s/^$1=//p" "$choices" | tail -n 1; fi; }
+  save() {
+    mkdir -p "$share_dir"
+    { if [ -f "$choices" ]; then grep -v "^$1=" "$choices" || true; fi; printf '%s=%s\n' "$1" "$2"; } >"$choices.new"
+    mv "$choices.new" "$choices"
+  }
+
+  # Add "x7" to, or take it out of, the tray's hidden list, keeping the
+  # other entries. The shell owns shell.json, so this goes through it.
+  tray_hidden() {
+    current=$(omarchy bar get omarchy.tray hidden 2>/dev/null) || current='[]'
+    case $current in '['*) ;; *) current='[]' ;; esac
+    if [ "$1" = add ]; then
+      new=$(printf '%s' "$current" | jq -c 'if index("x7") then . else . + ["x7"] end')
+    else
+      new=$(printf '%s' "$current" | jq -c 'map(select(. != "x7"))')
+    fi
+    [ "$new" = "$(printf '%s' "$current" | jq -c .)" ] || omarchy bar set omarchy.tray hidden "$new" --json >/dev/null
+  }
+
+  # center-end: the widget right of the clock, and the tray copy hidden.
+  # tray: the widget off, the icon back in the tray drawer. Both go through
+  # the running shell; without one, say what to run later.
+  place_icon() {
+    if [ "$1" = center-end ]; then
+      omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+      # The rescan returns before the shell has read the new plugin, so the
+      # first enable can answer "unknown": try for a few seconds.
+      tries=0 enabled=0
+      while [ "$tries" -lt 10 ]; do
+        if omarchy plugin enable "$plugin_id" --section centerEnd >/dev/null 2>&1; then enabled=1; break; fi
+        tries=$((tries + 1))
+        sleep 0.5
+      done
+      if [ "$enabled" = 1 ] && tray_hidden add; then
+        say "  in the bar's centerEnd section, right of the clock"
+      else
+        say "  the Omarchy shell did not answer; once it runs:"
+        say "    omarchy plugin enable $plugin_id --section centerEnd"
+        say "    and hide \"x7\" in the tray (right click its chevron)"
+      fi
+    else
+      omarchy plugin disable "$plugin_id" >/dev/null 2>&1 || true
+      tray_hidden remove 2>/dev/null || true
+      say "  in the tray drawer"
+    fi
+  }
+
+  # The rule lives in its own file, required from hyprland.lua, so taking
+  # it out is deleting one file and one line.
+  hypr_rule=$hypr_dir/x7.lua
+  hypr_require='require("hypr.x7") -- Sound Blaster X7 (x7 install.sh)'
+  set_float() {
+    if [ "$1" = yes ]; then
+      printf '%s\n' '-- Written by the x7 installer; install.sh --no-float removes it.' \
+        'o.window("^(x7-gui)$", { float = true, center = true })' >"$hypr_rule"
+      grep -qxF "$hypr_require" "$hypr_dir/hyprland.lua" || printf '\n%s\n' "$hypr_require" >>"$hypr_dir/hyprland.lua"
+      say "  floats, centred: $hypr_rule"
+    else
+      if [ -f "$hypr_dir/hyprland.lua" ] && grep -qxF "$hypr_require" "$hypr_dir/hyprland.lua"; then
+        grep -vxF "$hypr_require" "$hypr_dir/hyprland.lua" >"$hypr_dir/hyprland.lua.x7-new" || true
+        cat "$hypr_dir/hyprland.lua.x7-new" >"$hypr_dir/hyprland.lua"
+        rm -f "$hypr_dir/hyprland.lua.x7-new"
+      fi
+      rm -f "$hypr_rule"
+      say "  tiles like any window"
+    fi
+    if command -v hyprctl >/dev/null 2>&1 && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+      errors=$(hyprctl configerrors 2>/dev/null | grep -v '^$' || true)
+      [ -z "$errors" ] || say "  hyprctl configerrors: $errors"
+    fi
+  }
+
   if [ "$uninstall" = 1 ]; then
     say "removing $bin_dir/x7, $bin_dir/x7-gui, the launcher and autostart entries"
     rm -f "$bin_dir/x7" "$bin_dir/x7-gui" "$app_dir/x7-gui.desktop" "$autostart_dir/x7-gui.desktop"
-    rm -f "$share_dir/$rule"
+    if is_omarchy; then
+      if [ -d "$plugin_dir" ]; then
+        say "removing the Omarchy bar widget: $plugin_dir"
+        place_icon tray >/dev/null
+        rm -rf "$plugin_dir"
+      fi
+      if [ -f "$hypr_rule" ]; then
+        say "removing the Hyprland rule: $hypr_rule"
+        set_float no >/dev/null
+      fi
+    fi
+    rm -f "$share_dir/$rule" "$choices"
     rmdir "$share_dir" 2>/dev/null || true
     if [ -f "$udev_dir/$rule" ]; then
       say "udev rule: $udev_dir/$rule"
@@ -156,6 +256,40 @@ main() {
     say "  installed; unplug and replug the X7"
   else
     say "  then unplug and replug the X7"
+  fi
+
+  # Omarchy: where the icon goes and whether the window floats. A flag
+  # wins, then the answer from a previous run, then the question; with no
+  # terminal to ask on, nothing changes.
+  if is_omarchy; then
+    if [ -d "$payload_dir/omarchy/$plugin_id" ]; then
+      say "Omarchy bar widget: $plugin_dir"
+      mkdir -p "$plugin_dir"
+      cp "$payload_dir/omarchy/$plugin_id/"* "$plugin_dir/"
+      [ -n "$bar" ] || bar=$(saved bar)
+      if [ -z "$bar" ] && ( exec </dev/tty ) 2>/dev/null; then
+        if ask "  Put the X7 icon in the middle of the bar, right of the clock (no: tray drawer)?"; then bar=center-end; else bar=tray; fi
+      fi
+      if [ -n "$bar" ]; then
+        place_icon "$bar"
+        save bar "$bar"
+      else
+        say "  not placed; install.sh --bar=center-end puts it right of the clock"
+      fi
+    fi
+    if [ -f "$hypr_dir/hyprland.lua" ]; then
+      say "controls window:"
+      [ -n "$float" ] || float=$(saved float)
+      if [ -z "$float" ] && ( exec </dev/tty ) 2>/dev/null; then
+        if ask "  Float the controls window, centred?"; then float=yes; else float=no; fi
+      fi
+      if [ -n "$float" ]; then
+        set_float "$float"
+        save float "$float"
+      else
+        say "  unchanged; install.sh --float floats it"
+      fi
+    fi
   fi
 
   say "installed $("$bin_dir/x7-gui" --version)"

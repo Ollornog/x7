@@ -50,6 +50,18 @@ start it again.
 `install.sh --uninstall` removes everything it installed and leaves your
 profiles in `~/.config/x7/`.
 
+On Omarchy the installer asks two more questions: whether the X7 icon
+goes in the middle of the bar, right of the clock, or stays in the tray
+drawer, and whether the controls window floats. Flags answer them in
+advance, for scripts and agents (see [`AGENTS.md`](AGENTS.md)):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Stamrin/x7/main/install.sh | sh -s -- --bar=center-end --float
+```
+
+`--bar=tray` and `--no-float` undo them. The answers are remembered, so
+an update does not ask again.
+
 Needs x86_64 Linux with glibc 2.35 or newer: Ubuntu 22.04, Fedora 36,
 current Arch and Bazzite, or anything newer. `~/.local/bin` is on the
 PATH by default on Ubuntu, Fedora and Omarchy. No other packages: the
@@ -80,6 +92,12 @@ session has:
   ```
   exec-once = x7-gui --autostart
   ```
+
+On Omarchy, `install.sh --float` writes the float rule for you, to
+`~/.config/hypr/x7.lua`, and `--bar=center-end` installs a bar widget
+(`io.github.stamrin.x7`, from `dist/omarchy/`) that shows the icon right
+of the clock instead of in the tray drawer. The rest of this section is
+for doing it by hand, or on plain Hyprland.
 
 The controls window is 440 px wide and is meant to float. Hyprland's rule
 syntax has changed several times; check `hyprctl version` and use the form

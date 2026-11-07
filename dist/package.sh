@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds the release tarball: x7 (static musl), x7-gui (glibc), the udev
-# rule, the desktop file, install.sh, LICENSE and README. release.yml
+# rule, the desktop file, the Omarchy bar widget, install.sh, LICENSE and
+# README. release.yml
 # runs it inside ubuntu:22.04, which sets the glibc floor; the same
 # image runs it by hand. The version must equal both crate versions.
 # usage: dist/package.sh <version>
@@ -38,6 +39,8 @@ install -m755 "$gui_bin" "$stage/x7-gui"
 strip "$stage/x7" "$stage/x7-gui"
 install -m644 70-soundblaster-x7.rules dist/x7-gui.desktop LICENSE README.md "$stage/"
 install -m755 install.sh "$stage/install.sh"
+# The Omarchy bar widget; install.sh copies it into the shell's plugins.
+install -Dm644 -t "$stage/omarchy/io.github.stamrin.x7" dist/omarchy/io.github.stamrin.x7/*
 tarball=x7-$version-x86_64-linux.tar.gz
 tar -czf "$out/$tarball" -C "$out" "x7-$version"
 (cd "$out" && sha256sum "$tarball" >"$tarball.sha256")
