@@ -10,6 +10,11 @@ Never send USB Audio Class requests to the device and never detach the
 kernel audio driver, in code or in tests. The reason is in
 `docs/protocol.md` under "UAC (mixer) from userspace".
 
+Every HID command goes through the safe mode in `x7/src/transport.rs`
+and `x7/src/safety.rs` (`docs/safety.md`): no command during a
+recording, writes only after an answered read, and no retry, resync,
+reset or reopen after a missing reply. Do not add a path around it.
+
 ## Working here
 
 - Gates before any commit: `cargo fmt --all --check`,

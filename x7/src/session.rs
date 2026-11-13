@@ -16,6 +16,12 @@ use crate::transport::Device;
 
 pub const REPLY_DEADLINE: Duration = Duration::from_millis(500);
 const RECV_SLICE: Duration = Duration::from_millis(10);
+/// Quiet time after opening before the first command: the X7 takes about
+/// two seconds after enumerating before its firmware answers, and a read it
+/// misses now counts as a hang, so nothing is sent before this.
+pub const SETTLE: Duration = Duration::from_secs(3);
+/// How often a send paused for a recording looks again.
+const CAPTURE_RECHECK: Duration = Duration::from_secs(1);
 
 /// Where the device is, as far as the session can tell.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -29,6 +35,10 @@ pub enum Link {
     Connecting,
     /// The first refresh completed; the state mirrors the device.
     Ready,
+    /// The device stopped answering (no reply, a failed or slow write).
+    /// Nothing is sent to it until it is power-cycled; the session reopens
+    /// it only once it has re-enumerated. See `crate::safety`.
+    Unresponsive,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -81,16 +91,15 @@ enum Op {
     GetFeatures,
     SetSwitch(&'static Switch, f32),
     GetSwitch(&'static Switch),
-    /// `23 24` sent after a timeout; nothing completes until its reply.
-    Barrier,
 }
 
 #[derive(Clone, Copy)]
 struct InFlight {
     op: Op,
     deadline: Instant,
-    /// 0 for a first attempt, 1 for the single retry after a barrier.
-    retries: u8,
+    /// A protocol report arrived since the send: the device is alive, so a
+    /// missing completion is a rejected command, not a hang.
+    answered: bool,
 }
 
 pub(crate) struct Worker {
@@ -100,16 +109,22 @@ pub(crate) struct Worker {
     on_change: Box<dyn Fn() + Send>,
     queue: VecDeque<Op>,
     inflight: Option<InFlight>,
-    /// A first-attempt op that timed out; re-sent once after the barrier.
-    retry_next: Option<Op>,
-    /// `last_error` holds timeout text, which goes stale once the device
-    /// answers again. A rejected command's text stays until replaced.
-    timeout_error: bool,
     /// Reply deadline per op; `REPLY_DEADLINE` outside tests.
     pub(crate) deadline: Duration,
     opener: Box<dyn FnMut() -> Result<Device, Error> + Send>,
     reconnect_delay: Duration,
     last_attempt: Option<Instant>,
+    /// `SETTLE` outside tests.
+    settle: Duration,
+    opened_at: Option<Instant>,
+    /// Sends wait while the X7 records; `last_error` says so meanwhile.
+    paused_until: Option<Instant>,
+    /// `CAPTURE_RECHECK` outside tests.
+    pub(crate) recheck: Duration,
+    /// The identity of the enumeration that hung. The marker file does the
+    /// same across processes; this holds even if the marker could not be
+    /// written, so a reopen never reaches the same device again.
+    hung: Option<Option<String>>,
 }
 
 impl Worker {
@@ -131,12 +146,15 @@ impl Worker {
             on_change,
             queue: VecDeque::new(),
             inflight: None,
-            retry_next: None,
-            timeout_error: false,
             deadline: REPLY_DEADLINE,
             opener: Box::new(|| Err(Error::NoDevice)),
             reconnect_delay: Duration::from_secs(2),
             last_attempt: None,
+            settle: Duration::ZERO,
+            opened_at: None,
+            paused_until: None,
+            recheck: CAPTURE_RECHECK,
+            hung: None,
         }
     }
 
@@ -144,6 +162,7 @@ impl Worker {
     pub(crate) fn disconnected(
         opener: Box<dyn FnMut() -> Result<Device, Error> + Send>,
         reconnect_delay: Duration,
+        settle: Duration,
         rx: Receiver<Command>,
         on_change: Box<dyn Fn() + Send>,
     ) -> Worker {
@@ -154,12 +173,15 @@ impl Worker {
             on_change,
             queue: VecDeque::new(),
             inflight: None,
-            retry_next: None,
-            timeout_error: false,
             deadline: REPLY_DEADLINE,
             opener,
             reconnect_delay,
             last_attempt: None,
+            settle,
+            opened_at: None,
+            paused_until: None,
+            recheck: CAPTURE_RECHECK,
+            hung: None,
         }
     }
 
@@ -174,7 +196,16 @@ impl Worker {
         self.last_attempt = Some(Instant::now());
         match (self.opener)() {
             Ok(dev) => {
+                if self.hung.as_ref() == Some(&dev.identity()) {
+                    // Same enumeration as the one that hung: not power-cycled.
+                    drop(dev);
+                    self.update(|s| s.link = Link::Unresponsive);
+                    return;
+                }
+                self.hung = None;
                 self.dev = Some(dev);
+                self.opened_at = Some(Instant::now());
+                self.paused_until = None;
                 self.update(|s| {
                     s.link = Link::Connecting;
                     s.last_error = None;
@@ -186,10 +217,15 @@ impl Worker {
                 self.changed();
             }
             Err(e) => {
+                let link = if matches!(e, Error::Unresponsive(_)) {
+                    Link::Unresponsive
+                } else {
+                    Link::Absent
+                };
                 let text = e.to_string();
                 let is_new = self.update(|s| {
-                    let new = s.link != Link::Absent || s.last_error.as_deref() != Some(&text);
-                    s.link = Link::Absent;
+                    let new = s.link != link || s.last_error.as_deref() != Some(&text);
+                    s.link = link;
                     s.last_error = Some(text.clone());
                     new
                 });
@@ -209,15 +245,16 @@ impl Worker {
     }
 
     /// Drop the device and forget its values. `link` says why: `Absent` for
-    /// an I/O error (the node is gone), `Connecting` for a device that is
-    /// present but silent, which the next `reconnect` reopens.
+    /// an I/O error (the node is gone), `Unresponsive` for a hang, which the
+    /// next `reconnect` reopens only after a power cycle.
     fn disconnect(&mut self, link: Link, why: String) {
         self.dev = None;
         self.queue.clear();
         self.inflight = None;
-        self.retry_next = None;
-        // Reopen at once: a booting device should not hold the spinner for
-        // the 2 s absent poll, and a vanished node reports "no device" now.
+        self.opened_at = None;
+        self.paused_until = None;
+        // Try again at once: a vanished node reports "no device" now, and a
+        // hung one reports its marker. Opening sends nothing.
         self.last_attempt = None;
         self.update(|s| {
             s.link = link;
@@ -249,7 +286,6 @@ impl Worker {
                 Ok(()) => self.push_coalesced(Op::SetParam(p, p.to_raw(&v))),
                 Err(e) => {
                     self.update(|s| s.last_error = Some(e.to_string()));
-                    self.timeout_error = false;
                     self.changed();
                 }
             },
@@ -259,7 +295,6 @@ impl Worker {
                 Ok(()) => self.push_coalesced(Op::SetSwitch(sw, sw.to_raw(&v))),
                 Err(e) => {
                     self.update(|s| s.last_error = Some(e.to_string()));
-                    self.timeout_error = false;
                     self.changed();
                 }
             },
@@ -305,25 +340,46 @@ impl Worker {
             Op::SetOutput(o) => protocol::encode_output_set(o),
             Op::GetOutput => protocol::encode_output_get().to_vec(),
             Op::SetFeature(f, on) => protocol::encode_feature_set(f, on).to_vec(),
-            Op::GetFeatures | Op::Barrier => protocol::encode_feature_get().to_vec(),
+            Op::GetFeatures => protocol::encode_feature_get().to_vec(),
             Op::SetSwitch(sw, raw) => sw.wire.set_bytes(raw),
             Op::GetSwitch(sw) => sw.wire.get_bytes(),
         }
     }
 
     fn dispatch(&mut self, op: Op) {
-        self.dispatch_attempt(op, 0);
-    }
-
-    fn dispatch_attempt(&mut self, op: Op, retries: u8) {
         let Some(dev) = self.dev.as_mut() else { return };
         match dev.send(&Self::bytes_for(op)) {
             Ok(()) => {
                 self.inflight = Some(InFlight {
                     op,
                     deadline: Instant::now() + self.deadline,
-                    retries,
+                    answered: false,
                 });
+                if self.paused_until.take().is_some() {
+                    // The recording ended; its message is stale.
+                    self.update(|s| s.last_error = None);
+                    self.changed();
+                }
+            }
+            Err(Error::CaptureOpen(why)) => {
+                // Not a fault: wait for the recording to end, keep the op.
+                self.queue.push_front(op);
+                let first = self.paused_until.is_none();
+                self.paused_until = Some(Instant::now() + self.recheck);
+                if first {
+                    let text = Error::CaptureOpen(why).to_string();
+                    self.update(|s| s.last_error = Some(text));
+                    self.changed();
+                }
+            }
+            Err(Error::NotVerified) => {
+                // A write before any answered read: read first, then the write.
+                self.queue.push_front(op);
+                self.dispatch(Op::GetOutput);
+            }
+            Err(e @ Error::Unresponsive(_)) => {
+                self.hung = Some(dev.identity());
+                self.disconnect(Link::Unresponsive, e.to_string());
             }
             Err(e) => self.disconnect(Link::Absent, e.to_string()),
         }
@@ -333,19 +389,26 @@ impl Worker {
         if self.inflight.is_some() {
             return;
         }
+        if self.opened_at.is_some_and(|t| t.elapsed() < self.settle) {
+            return;
+        }
+        if self.paused_until.is_some_and(|t| Instant::now() < t) {
+            return;
+        }
         if let Some(op) = self.queue.pop_front() {
             self.dispatch(op);
         }
     }
 
-    /// A timed-out op leaves a possible late reply in the pipe, so send a
-    /// barrier (`23 24`) and complete nothing until its reply arrives. A
-    /// barrier that itself times out means the device is unresponsive.
+    /// An op without its completion by the deadline. If nothing at all came
+    /// back the device hung: stop for good (no barrier, no retry, no
+    /// reopen of this enumeration). If the device answered something else,
+    /// it is alive and rejected the command: report it and go on.
     fn check_deadline(&mut self) {
         let Some(InFlight {
             op,
             deadline,
-            retries,
+            answered,
         }) = self.inflight
         else {
             return;
@@ -353,28 +416,25 @@ impl Worker {
         if Instant::now() < deadline {
             return;
         }
-        if matches!(op, Op::Barrier) {
-            self.disconnect(
-                Link::Connecting,
-                "device unresponsive: no reply to resync".into(),
-            );
-            return;
-        }
-        if retries > 0 && self.update(|s| s.link == Link::Connecting) {
-            // The first refresh lost a read twice: the firmware is still
-            // booting. Reopen and start over rather than settle with a hole.
-            self.disconnect(
-                Link::Connecting,
-                format!("no reply to {op:?} while connecting"),
-            );
-            return;
-        }
-        self.update(|s| s.last_error = Some(format!("no reply to {op:?}")));
-        self.timeout_error = true;
-        self.changed();
         self.inflight = None;
-        self.retry_next = if retries == 0 { Some(op) } else { None };
-        self.dispatch(Op::Barrier);
+        if answered {
+            self.update(|s| s.last_error = Some(format!("the X7 did not apply {op:?}")));
+            self.changed();
+            return;
+        }
+        let bytes = crate::log::hex(&Self::bytes_for(op));
+        let reason = format!(
+            "no reply to {bytes} within {} ms",
+            self.deadline.as_millis()
+        );
+        let text = match self.dev.as_mut() {
+            Some(dev) => {
+                self.hung = Some(dev.identity());
+                dev.trip(&reason).to_string()
+            }
+            None => reason,
+        };
+        self.disconnect(Link::Unresponsive, text);
     }
 
     /// One iteration: pump commands, send if idle, read one report, check
@@ -421,6 +481,12 @@ impl Worker {
 
     /// Every report becomes state. Task 3 adds in-flight completion.
     fn apply(&mut self, raw: &protocol::InputReport) {
+        if raw[0] == 0
+            && raw[1..].iter().any(|&b| b != 0)
+            && let Some(f) = self.inflight.as_mut()
+        {
+            f.answered = true;
+        }
         let report = protocol::decode_report(raw);
         let changed = self.update(|s| match &report {
             Report::ParamPush { group, id, value } => {
@@ -512,7 +578,7 @@ impl Worker {
                     feature, on: got, ..
                 },
             ) if *feature == f as u8 && *got == on => None,
-            (Op::GetFeatures | Op::Barrier, Report::Features(_)) => None,
+            (Op::GetFeatures, Report::Features(_)) => None,
             (Op::SetSwitch(sw, value), _) if sw.wire.is_set_done(bytes, value) => {
                 Some(Op::GetSwitch(sw))
             }
@@ -523,21 +589,14 @@ impl Worker {
         if let Some(next) = follow_up {
             self.queue.push_front(next);
         }
-        if !matches!(op, Op::Barrier)
-            && self.timeout_error
-            && self.update(|s| s.last_error.take().is_some())
-        {
-            // The device answers again; a timeout message from earlier is stale.
+        if self.update(|s| {
+            s.last_error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("the X7 did not apply"))
+        }) {
+            // The device applies commands again; a rejection from earlier is stale.
+            self.update(|s| s.last_error = None);
             self.changed();
-        }
-        if matches!(op, Op::Barrier) {
-            // Resync succeeded: the device answers again. Re-send the op that
-            // timed out, once, and drop the stale error text.
-            if let Some(retry) = self.retry_next.take() {
-                self.update(|s| s.last_error = None);
-                self.changed();
-                self.dispatch_attempt(retry, 1);
-            }
         }
     }
 }
@@ -556,7 +615,12 @@ impl Session {
     /// `on_change` runs on the device thread after every state change and
     /// must not block.
     pub fn start(on_change: Box<dyn Fn() + Send>) -> Session {
-        Self::start_with_opener(Box::new(Device::open), Duration::from_secs(2), on_change)
+        Self::spawn(
+            Box::new(Device::open),
+            Duration::from_secs(2),
+            SETTLE,
+            on_change,
+        )
     }
 
     /// `start` with a custom opener: `fake::device` for a client without
@@ -566,8 +630,17 @@ impl Session {
         reconnect_delay: Duration,
         on_change: Box<dyn Fn() + Send>,
     ) -> Session {
+        Self::spawn(opener, reconnect_delay, Duration::ZERO, on_change)
+    }
+
+    fn spawn(
+        opener: Box<dyn FnMut() -> Result<Device, Error> + Send>,
+        reconnect_delay: Duration,
+        settle: Duration,
+        on_change: Box<dyn Fn() + Send>,
+    ) -> Session {
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut worker = Worker::disconnected(opener, reconnect_delay, rx, on_change);
+        let mut worker = Worker::disconnected(opener, reconnect_delay, settle, rx, on_change);
         let state = worker.state.clone();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop_flag = stop.clone();
@@ -623,6 +696,7 @@ mod tests {
 
     pub(super) fn rig() -> Rig {
         let (dev, x7) = crate::transport::fake_pair();
+        let dev = dev.assume_verified();
         let (tx, rx) = channel();
         let changes = Arc::new(AtomicUsize::new(0));
         let c = changes.clone();
@@ -652,6 +726,7 @@ mod tests {
         let worker = Worker::disconnected(
             Box::new(move || Ok(dev.lock().unwrap().take().expect("opened once"))),
             Duration::from_millis(1),
+            Duration::ZERO,
             rx,
             Box::new(move || {
                 c.fetch_add(1, Ordering::SeqCst);
@@ -734,69 +809,19 @@ mod tests {
 
     #[test]
     fn a_connecting_device_that_vanishes_is_absent() {
-        let Rig {
-            mut worker,
-            x7,
-            tx: _tx,
-            changes: _,
-        } = cold_rig();
-        worker.step();
-        assert_eq!(worker.state.lock().unwrap().link, Link::Connecting);
-        drop(x7);
-        worker.step(); // send fails or read hits EOF
-        assert_eq!(worker.state.lock().unwrap().link, Link::Absent);
-    }
-
-    #[test]
-    fn a_read_dropped_while_connecting_reopens_instead_of_settling() {
-        let mut r = cold_rig();
-        r.worker.step(); // opens
-        r.worker.deadline = Duration::from_millis(20);
-        r.worker.step(); // GetOutput sent
-        let _ = r.sent();
-        wait_past_deadline(&mut r);
-        let _ = r.sent(); // barrier
-        r.device_sends(&[0x00, 0x23, 0x24, 0x00, 0x01]);
-        let _ = r.sent(); // GetOutput retry
-        wait_past_deadline(&mut r); // dropped: the device is still booting
-        let s = r.state();
-        assert_eq!(s.link, Link::Connecting);
-        assert!(r.worker.dev.is_none(), "reopened, not settled with a hole");
-        assert!(s.last_error.unwrap().contains("GetOutput"));
-    }
-
-    #[test]
-    fn a_silent_device_is_reopened_without_the_absent_poll_delay() {
-        // Opens once, then reports no device.
-        let (dev, x7) = crate::transport::fake_pair();
-        let dev = Mutex::new(Some(dev));
-        let (tx, rx) = channel();
-        let worker = Worker::disconnected(
+        let dev = Mutex::new(Some(crate::transport::gone_device()));
+        let (_tx, rx) = channel();
+        let mut worker = Worker::disconnected(
             Box::new(move || dev.lock().unwrap().take().ok_or(Error::NoDevice)),
             Duration::from_secs(60),
+            Duration::ZERO,
             rx,
             Box::new(|| {}),
         );
-        let mut r = Rig {
-            worker,
-            x7,
-            tx,
-            changes: Arc::new(AtomicUsize::new(0)),
-        };
-        r.worker.step(); // opens; the 60 s poll delay now has a start time
-        r.worker.deadline = Duration::from_millis(20);
-        r.worker.step(); // GetOutput sent
-        let _ = r.sent();
-        wait_past_deadline(&mut r);
-        let _ = r.sent(); // barrier
-        wait_past_deadline(&mut r); // barrier timed out: silent device dropped
-        assert_eq!(r.state().link, Link::Connecting);
-        r.worker.step(); // reopen attempt right away, not in 60 s
-        assert_eq!(
-            r.state().link,
-            Link::Absent,
-            "the opener was asked again at once"
-        );
+        worker.step();
+        assert_eq!(worker.state.lock().unwrap().link, Link::Connecting);
+        worker.step(); // the send fails with ENODEV: unplugged, not hung
+        assert_eq!(worker.state.lock().unwrap().link, Link::Absent);
     }
 
     #[test]
@@ -996,137 +1021,195 @@ mod tests {
         r.worker.step();
     }
 
-    #[test]
-    fn timeout_reports_error_and_sends_barrier() {
-        let mut r = rig();
-        r.worker.deadline = Duration::from_millis(20);
-        r.tx.send(Command::SetParam(crystalizer(), Value::Float(0.5)))
-            .unwrap();
-        r.worker.step();
-        let _ = r.sent();
-        wait_past_deadline(&mut r);
-        assert!(r.state().last_error.unwrap().contains("no reply"));
-        assert_eq!(r.sent(), vec![0x23, 0x24]);
-        assert!(matches!(
-            r.worker.inflight,
-            Some(InFlight {
-                op: Op::Barrier,
-                ..
-            })
-        ));
+    /// Nothing more reached the device end of the socket.
+    fn nothing_sent(x7: &mut UnixStream) -> bool {
+        x7.set_nonblocking(true).unwrap();
+        let mut buf = [0u8; 65];
+        let quiet = match x7.read(&mut buf) {
+            Ok(0) => true, // the worker closed its end
+            Ok(_) => false,
+            Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
+        };
+        x7.set_nonblocking(false).unwrap();
+        quiet
     }
 
     #[test]
-    fn late_ack_after_timeout_does_not_advance_the_next_command() {
-        let mut r = rig();
-        r.worker.deadline = Duration::from_millis(20);
-        let bass = settings::find("sbx", "bass-level").unwrap();
-        r.tx.send(Command::SetParam(crystalizer(), Value::Float(0.5)))
-            .unwrap(); // A
-        r.tx.send(Command::SetParam(bass, Value::Float(0.5)))
-            .unwrap(); // B, queued
-        r.worker.step();
-        let _ = r.sent(); // A sent
-        wait_past_deadline(&mut r); // A times out, barrier sent
-        assert_eq!(r.sent(), vec![0x23, 0x24]);
-        r.device_sends(&[0x00, 0x20]); // A's late ack: must be ignored
-        assert!(matches!(
-            r.worker.inflight,
-            Some(InFlight {
-                op: Op::Barrier,
-                ..
-            })
-        ));
-        assert!(
-            matches!(r.worker.queue.front(), Some(Op::SetParam(p, _)) if std::ptr::eq(*p, bass))
-        );
-        r.device_sends(&[0x00, 0x23, 0x24, 0x00, 0x01]); // barrier reply
-        // A is retried once before B, and completes normally this time.
-        assert_eq!(r.sent()[7], 0x10); // crystalizer-level set id
-        r.device_sends(&[0x00, 0x20]);
-        r.worker.step();
-        assert_eq!(r.sent(), vec![0x26, 0x01, 0x96, 0x08]);
-        r.device_sends(&[0x00, 0x26, 0x01, 0x00, 0x96, 0x08, 0x3f, 0x00]);
-        r.worker.step(); // B sent
-        assert_eq!(r.sent()[7], 0x32); // bass-level set id
-        r.device_sends(&[0x00, 0x20]); // B's own ack
-        r.worker.step();
-        assert_eq!(r.sent(), vec![0x26, 0x01, 0x96, 0x19]); // B's follow-up get, once
-        assert!(r.worker.queue.is_empty());
-    }
-
-    #[test]
-    fn timed_out_op_is_retried_once_after_the_barrier() {
+    fn a_missing_reply_stops_the_session_without_any_retry() {
         let mut r = rig();
         r.worker.deadline = Duration::from_millis(20);
         r.tx.send(Command::Refresh).unwrap();
         r.worker.step();
         assert_eq!(r.sent(), vec![0x23, 0x4d]);
-        wait_past_deadline(&mut r); // GetOutput timed out, barrier sent
-        assert_eq!(r.sent(), vec![0x23, 0x24]);
-        r.device_sends(&[0x00, 0x23, 0x24, 0x00, 0x01]); // barrier reply
-        // The timed-out read goes again, before the rest of the refresh.
-        assert_eq!(r.sent(), vec![0x23, 0x4d]);
-        r.device_sends(&[0x00, 0x23, 0x4d, 0x00, 0x01]);
-        let s = r.state();
-        assert_eq!(s.output, Some(Output::Headphones));
-        assert_eq!(
-            s.last_error, None,
-            "error cleared once the resync succeeded"
-        );
-    }
-
-    #[test]
-    fn an_op_that_times_out_twice_is_dropped() {
-        let mut r = rig();
-        r.worker.deadline = Duration::from_millis(20);
-        r.tx.send(Command::Refresh).unwrap();
-        r.worker.step();
-        let _ = r.sent(); // GetOutput
         wait_past_deadline(&mut r);
-        let _ = r.sent(); // barrier
-        r.device_sends(&[0x00, 0x23, 0x24, 0x00, 0x01]);
-        let _ = r.sent(); // GetOutput retry
-        wait_past_deadline(&mut r); // retry timed out too
-        let _ = r.sent(); // barrier again
-        r.device_sends(&[0x00, 0x23, 0x24, 0x00, 0x01]);
-        r.worker.step();
-        // Next op is the refresh's GetFeatures, not a third GetOutput.
-        assert_eq!(r.sent(), vec![0x23, 0x24]);
-        assert!(matches!(
-            r.worker.inflight,
-            Some(InFlight {
-                op: Op::GetFeatures,
-                ..
-            })
-        ));
-        assert!(r.state().last_error.unwrap().contains("GetOutput"));
-    }
-
-    #[test]
-    fn barrier_timeout_leaves_a_present_device_connecting() {
-        let mut r = rig();
-        r.worker.deadline = Duration::from_millis(20);
-        r.tx.send(Command::Refresh).unwrap();
-        r.worker.step();
-        let _ = r.sent();
-        wait_past_deadline(&mut r); // GetOutput timed out, barrier sent
-        let _ = r.sent();
-        wait_past_deadline(&mut r); // barrier timed out
         let s = r.state();
-        assert_eq!(
-            s.link,
-            Link::Connecting,
-            "present but silent, as while booting"
-        );
-        assert!(s.last_error.unwrap().contains("unresponsive"));
-        assert!(r.worker.queue.is_empty());
+        assert_eq!(s.link, Link::Unresponsive);
+        assert!(s.last_error.unwrap().contains("Power-cycle the X7"));
         assert!(r.worker.dev.is_none());
-        // The reopen fails (the rig's opener has no device): now it is absent.
-        r.worker.reconnect_delay = Duration::from_millis(1);
-        std::thread::sleep(Duration::from_millis(2));
+        assert!(
+            r.worker.queue.is_empty(),
+            "the rest of the refresh is dropped"
+        );
+        for _ in 0..5 {
+            r.worker.step();
+        }
+        assert!(nothing_sent(&mut r.x7), "no barrier, no retry");
+    }
+
+    #[test]
+    fn a_hung_device_stays_unresponsive_until_it_reenumerates() {
+        let (dev, mut x7) = crate::transport::fake_pair();
+        let dev = Mutex::new(Some(dev));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let a = attempts.clone();
+        let (_tx, rx) = channel();
+        let mut worker = Worker::disconnected(
+            Box::new(move || {
+                if a.fetch_add(1, Ordering::SeqCst) < 2 {
+                    Err(Error::Unresponsive("marked hung".into()))
+                } else {
+                    Ok(dev.lock().unwrap().take().expect("opened once"))
+                }
+            }),
+            Duration::ZERO,
+            Duration::ZERO,
+            rx,
+            Box::new(|| {}),
+        );
+        worker.step();
+        assert_eq!(worker.state.lock().unwrap().link, Link::Unresponsive);
+        worker.step();
+        assert_eq!(worker.state.lock().unwrap().link, Link::Unresponsive);
+        // Power cycled: the opener finds a new enumeration.
+        worker.step();
+        assert_eq!(worker.state.lock().unwrap().link, Link::Connecting);
+        worker.step();
+        let mut buf = [0u8; 65];
+        x7.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf[1..3], &[0x23, 0x4d], "starts over with a read");
+    }
+
+    #[test]
+    fn the_same_enumeration_is_never_reopened_after_a_hang() {
+        // The opener hands out fresh handles to the same (unknown) device,
+        // as Device::open would when the marker could not be written.
+        let ends = Arc::new(Mutex::new(Vec::new()));
+        let e = ends.clone();
+        let (_tx, rx) = channel();
+        let mut worker = Worker::disconnected(
+            Box::new(move || {
+                let (dev, x7) = crate::transport::fake_pair();
+                e.lock().unwrap().push(x7);
+                Ok(dev)
+            }),
+            Duration::ZERO,
+            Duration::ZERO,
+            rx,
+            Box::new(|| {}),
+        );
+        worker.deadline = Duration::from_millis(20);
+        worker.step(); // opens, queues the refresh
+        worker.step(); // GetOutput sent
+        std::thread::sleep(Duration::from_millis(25));
+        worker.step(); // no reply: hung
+        assert_eq!(worker.state.lock().unwrap().link, Link::Unresponsive);
+        for _ in 0..5 {
+            worker.step();
+        }
+        assert_eq!(worker.state.lock().unwrap().link, Link::Unresponsive);
+        let mut ends = ends.lock().unwrap();
+        let mut buf = [0u8; 65];
+        ends[0].read_exact(&mut buf).unwrap(); // the one GetOutput
+        for x7 in ends.iter_mut() {
+            assert!(nothing_sent(x7), "nothing more on any handle");
+        }
+    }
+
+    #[test]
+    fn a_command_answered_otherwise_is_rejected_not_a_hang() {
+        let mut r = rig();
+        r.worker.deadline = Duration::from_millis(20);
+        r.tx.send(Command::SetOutput(Output::Speakers)).unwrap();
         r.worker.step();
-        assert_eq!(r.state().link, Link::Absent);
+        let _ = r.sent();
+        // The device answers, but with the other output: it is alive.
+        r.device_sends(&[0x00, 0x23, 0x4e, 0x00, 0x01]);
+        wait_past_deadline(&mut r);
+        let s = r.state();
+        assert_eq!(s.link, Link::Ready);
+        assert!(s.last_error.unwrap().contains("did not apply"));
+        assert!(r.worker.dev.is_some());
+        assert!(!r.worker.dev.as_ref().unwrap().is_tripped());
+        // The next command goes out normally and clears the message.
+        r.tx.send(Command::SetFeature(Feature::Sbx, true)).unwrap();
+        r.worker.step();
+        assert_eq!(r.sent(), vec![0x23, 0x23, 0x01, 0x01]);
+        r.device_sends(&[0x00, 0x23, 0x23, 0x00, 0x01, 0x01, 0x01]);
+        assert_eq!(r.state().last_error, None);
+    }
+
+    #[test]
+    fn the_first_command_waits_for_the_settle_time() {
+        let mut r = cold_rig();
+        r.worker.settle = Duration::from_millis(60);
+        r.worker.step(); // opens
+        r.worker.step();
+        assert!(nothing_sent(&mut r.x7), "quiet while the firmware boots");
+        std::thread::sleep(Duration::from_millis(70));
+        r.worker.step();
+        assert_eq!(r.sent(), vec![0x23, 0x4d]);
+    }
+
+    #[test]
+    fn sends_pause_while_the_x7_records_and_resume_after() {
+        let dir = std::env::temp_dir().join(format!("x7-session-capture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sub = dir.join("card1/pcm0c/sub0");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("status"), "state: RUNNING\n").unwrap();
+        let (dev, mut x7) = crate::transport::fake_pair();
+        let dev = dev.assume_verified().with_safety(
+            crate::safety::Capture::Card(dir.join("card1")),
+            crate::safety::DeviceId {
+                bus: 1,
+                dev: 2,
+                boot: "b".into(),
+            },
+            crate::safety::Marker::at(dir.join("hang")),
+        );
+        let (tx, rx) = channel();
+        let mut worker = Worker::with_device(dev, rx, Box::new(|| {}));
+        worker.recheck = Duration::from_millis(10);
+        tx.send(Command::SetFeature(Feature::Sbx, true)).unwrap();
+        worker.step();
+        assert!(nothing_sent(&mut x7));
+        let s = worker.state.lock().unwrap().clone();
+        assert_eq!(s.link, Link::Ready, "a recording is no fault");
+        assert!(s.last_error.unwrap().contains("recording"));
+        std::fs::write(sub.join("status"), "closed\n").unwrap();
+        std::thread::sleep(Duration::from_millis(15));
+        worker.step();
+        let mut buf = [0u8; 65];
+        x7.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf[1..5], &[0x23, 0x23, 0x01, 0x01]);
+        assert_eq!(worker.state.lock().unwrap().last_error, None);
+    }
+
+    #[test]
+    fn a_write_before_any_answered_read_reads_first() {
+        let (dev, mut x7) = crate::transport::fake_pair();
+        let (tx, rx) = channel();
+        let mut worker = Worker::with_device(dev, rx, Box::new(|| {}));
+        tx.send(Command::SetFeature(Feature::Sbx, true)).unwrap();
+        worker.step();
+        let mut buf = [0u8; 65];
+        x7.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf[1..3], &[0x23, 0x4d], "read first");
+        x7.write_all(&report(&[0x00, 0x23, 0x4d, 0x00, 0x01]))
+            .unwrap();
+        worker.step();
+        x7.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf[1..5], &[0x23, 0x23, 0x01, 0x01], "then the write");
     }
 
     #[test]
@@ -1281,6 +1364,7 @@ mod tests {
         let mut worker = Worker::disconnected(
             Box::new(move || Ok(dev.lock().unwrap().take().unwrap())),
             Duration::from_millis(1),
+            Duration::ZERO,
             rx,
             Box::new(|| {}),
         );
@@ -1290,26 +1374,6 @@ mod tests {
         let mut buf = [0u8; 65];
         x7.read_exact(&mut buf).unwrap();
         assert_eq!(&buf[1..3], &[0x23, 0x4d], "GetOutput goes before the set");
-    }
-
-    #[test]
-    fn error_from_a_double_timeout_clears_when_an_op_completes() {
-        let mut r = rig();
-        r.worker.deadline = Duration::from_millis(20);
-        r.tx.send(Command::Refresh).unwrap();
-        r.worker.step();
-        let _ = r.sent(); // GetOutput
-        wait_past_deadline(&mut r);
-        let _ = r.sent(); // barrier
-        r.device_sends(&[0x00, 0x23, 0x24, 0x00, 0x01]);
-        let _ = r.sent(); // GetOutput retry
-        wait_past_deadline(&mut r); // dropped
-        let _ = r.sent(); // barrier again
-        r.device_sends(&[0x00, 0x23, 0x24, 0x00, 0x01]);
-        r.worker.step(); // GetFeatures sent
-        assert!(r.state().last_error.is_some());
-        r.device_sends(&[0x00, 0x23, 0x24, 0x00, 0x01]); // GetFeatures completes
-        assert_eq!(r.state().last_error, None);
     }
 
     fn gain() -> &'static Switch {
@@ -1400,27 +1464,6 @@ mod tests {
             .unwrap();
         r.worker.step();
         assert_eq!(r.worker.queue.len(), 1);
-    }
-
-    #[test]
-    fn device_ack_during_barrier_completes_nothing() {
-        let target = settings::find_switch("speakers", "output-target").unwrap();
-        let mut r = rig();
-        r.worker.deadline = Duration::from_millis(20);
-        r.tx.send(Command::SetSwitch(target, Value::Enum(0)))
-            .unwrap();
-        r.worker.step();
-        let _ = r.sent();
-        wait_past_deadline(&mut r); // timed out, barrier sent
-        assert_eq!(r.sent(), vec![0x23, 0x24]);
-        r.device_sends(&[0x00, 0x5a, 0x02, 0x0a, 0x2c, 0x00, 0x00, 0x01]); // late ack
-        assert!(matches!(
-            r.worker.inflight,
-            Some(InFlight {
-                op: Op::Barrier,
-                ..
-            })
-        ));
     }
 
     #[test]

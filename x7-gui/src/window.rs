@@ -252,6 +252,7 @@ fn status_word(link: Link, error: Option<&str>) -> &'static str {
         (Link::Ready, Some(_)) => "Error",
         (Link::Connecting, _) => "Connecting",
         (Link::Absent, _) => "Not connected",
+        (Link::Unresponsive, _) => "Not answering",
     }
 }
 
@@ -458,6 +459,7 @@ impl Controls {
                 p.accent.gamma_multiply(a)
             }
             (Link::Absent, _) => p.text_weak,
+            (Link::Unresponsive, _) => p.warning,
         };
         let r = ui
             .horizontal(|ui| {
@@ -483,13 +485,17 @@ impl Controls {
                 "Connecting",
                 "The X7 answers a few seconds after it powers on",
             ),
+            Link::Unresponsive => (
+                "Not answering",
+                "Unplug the X7's power supply for 10 seconds, then plug it back in. Nothing is sent to it until then",
+            ),
             _ => ("Not connected", "Power on or plug in the Sound Blaster X7"),
         };
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() * 0.35);
             ui.heading(title);
             ui.label(egui::RichText::new(sub).color(p.text_weak));
-            if s.link == Link::Absent
+            if matches!(s.link, Link::Absent | Link::Unresponsive)
                 && let Some(e) = &s.last_error
             {
                 ui.add_space(8.0);
@@ -1518,5 +1524,6 @@ mod tests {
         assert_eq!(status_word(Link::Ready, Some("no reply")), "Error");
         assert_eq!(status_word(Link::Connecting, Some("timeout")), "Connecting");
         assert_eq!(status_word(Link::Absent, Some("gone")), "Not connected");
+        assert_eq!(status_word(Link::Unresponsive, None), "Not answering");
     }
 }
