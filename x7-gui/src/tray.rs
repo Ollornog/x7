@@ -61,6 +61,7 @@ impl ksni::Tray for X7Tray {
         let text = match (s.link, s.output) {
             (Link::Absent, _) => "X7: not connected".to_owned(),
             (Link::Connecting, _) => "X7: connecting".to_owned(),
+            (Link::Unresponsive, _) => "X7: not answering, power-cycle it".to_owned(),
             (Link::Ready, Some(Output::Headphones)) => "X7: headphones".to_owned(),
             (Link::Ready, Some(Output::Speakers)) => "X7: speakers".to_owned(),
             (Link::Ready, None) => "X7".to_owned(),

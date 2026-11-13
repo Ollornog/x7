@@ -217,6 +217,7 @@ x7 voice noise-reduction on
 x7 scout on
 x7 profile save evening        # ~/.config/x7/profiles/evening.toml
 x7 profile load evening
+x7 status                      # safe-mode state; sends nothing
 ```
 
 Profiles are TOML files in `~/.config/x7/profiles/`; a profile name with
@@ -227,6 +228,21 @@ see "UAC (mixer) from userspace" in [`docs/protocol.md`](docs/protocol.md).
 Master volume and mute already work through ALSA and the kernel's HID
 consumer-control mapping, so the knob and its button need nothing from
 this software.
+
+## Safe mode
+
+One X7 stopped answering after the first command and needed a power
+cycle (details in [`docs/safety.md`](docs/safety.md)). So `x7` and
+`x7-gui` treat the device carefully:
+
+- no command while a recording from the X7 is open;
+- writes only after a read was answered;
+- no reply, a failed or a slow write: stop at once, no retry, no reset,
+  and tell you to unplug the X7's power supply for 10 seconds. Nothing
+  more is sent to that device until it has been power-cycled;
+- every command and reply is logged to `~/.local/state/x7/x7.log`.
+
+`x7 status` shows that state without sending anything to the device.
 
 ## Build from source
 

@@ -58,6 +58,9 @@ enum Cmd {
         #[command(subcommand)]
         action: ProfileCmd,
     },
+    /// Safe-mode state without sending anything: device node, recordings,
+    /// hang marker, log file
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -86,6 +89,12 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<(), Error> {
+    if let Cmd::Status = cli.cmd {
+        for (k, v) in x7::transport::status()? {
+            println!("{k:<10} {v}");
+        }
+        return Ok(());
+    }
     let mut dev = Device::open()?;
     match cli.cmd {
         Cmd::Output { target: None } => {
@@ -137,6 +146,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                 println!("{}", e.line());
             }
         }
+        Cmd::Status => unreachable!("handled before the device is opened"),
         Cmd::Scout { state: Some(state) } => {
             let on = master_state(&state).ok_or_else(|| Error::UnknownValue {
                 name: "scout",

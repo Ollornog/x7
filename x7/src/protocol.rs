@@ -70,7 +70,7 @@ pub fn is_output_reply(report: &[u8]) -> bool {
 
 /// Echo of an output set command, carrying the value that was sent. The
 /// headphone switch sends only this. Requiring the requested value means a
-/// switch the device did not apply ends in `Error::Timeout`.
+/// switch the device did not apply ends in `Error::BadReply`.
 pub fn is_output_set_echo(report: &[u8], output: Output) -> bool {
     let value: &[u8] = match output {
         Output::Headphones => &[0x01],
@@ -115,7 +115,7 @@ pub fn is_feature_reply(report: &[u8]) -> bool {
 
 /// `00 23 23 00 <id> <on>` + mask, sent after a set and on button presses.
 /// Matches only the requested feature in the requested state, so a set that
-/// the device did not apply ends in `Error::Timeout` rather than silent success.
+/// the device did not apply ends in `Error::BadReply` rather than silent success.
 pub fn is_feature_set_echo(report: &[u8], feature: Feature, on: bool) -> bool {
     report.len() >= 6
         && report[1..3] == [0x23, 0x23]
@@ -198,6 +198,40 @@ pub fn decode_device_value(report: &InputReport, cmd: u8) -> f32 {
             ((mask >> 0x0b) & 1) as f32
         }
         _ => report[5] as f32,
+    }
+}
+
+/// `23 <id>` reads: output, feature mask, available features, jack, and the
+/// read ids of the `TOGGLE_IDS` pairs (each set id minus one).
+const READ_23: [u8; 8] = [0x4d, 0x24, 0x25, 0x12, 0x42, 0x44, 0x4a, 0x58];
+
+/// Is this command one of the known reads? Everything else counts as a
+/// write. The device sees 64 bytes padded with zeros, so `23 43` and
+/// `23 43 00` are the same (Direct Mode off) and a read must be followed by
+/// nothing but zeros. Used by the transport's safe mode: writes go out only
+/// after a read has been answered.
+pub fn is_read_command(cmd: &[u8]) -> bool {
+    let tail_zero = |from: usize| cmd.iter().skip(from).all(|&b| b == 0);
+    match cmd {
+        [0x23, id, ..] => READ_23.contains(id) && tail_zero(2),
+        [0x26, 0x01, _, _, ..] => tail_zero(4),
+        [0x5a, _, 0x01, 0x01 | 0x02, ..] => tail_zero(4),
+        _ => false,
+    }
+}
+
+/// Does `report` answer the read `cmd`? `23 xx` replies `00 23 xx ...`,
+/// `26 01 g i` replies `00 26 01 00 g i ...`, `5a c 01 ..` replies
+/// `00 5a c ...`. False for anything that is not a read.
+pub fn answers_read(cmd: &[u8], report: &[u8]) -> bool {
+    if !is_read_command(cmd) || report.len() < 6 || report[0] != 0x00 {
+        return false;
+    }
+    match cmd {
+        [0x23, id, ..] => report[1..3] == [0x23, *id],
+        [0x26, 0x01, g, i, ..] => report[1..6] == [0x26, 0x01, 0x00, *g, *i],
+        [0x5a, c, ..] => report[1..3] == [0x5a, *c],
+        _ => false,
     }
 }
 
@@ -298,6 +332,62 @@ mod tests {
         let mut r = [0u8; 16];
         r[..bytes.len()].copy_from_slice(bytes);
         r
+    }
+
+    #[test]
+    fn reads_are_told_from_writes() {
+        for read in [
+            &[0x23, 0x4d][..],
+            &[0x23, 0x24],
+            &[0x23, 0x25],
+            &[0x23, 0x12],
+            &[0x23, 0x42],
+            &[0x23, 0x58, 0x00, 0x00],
+            &[0x26, 0x01, 0x96, 0x08],
+            &[0x26, 0x01, 0x96, 0x00],
+            &[0x5a, 0x2c, 0x01, 0x01],
+            &[0x5a, 0x2c, 0x01, 0x02],
+            &[0x5a, 0x39, 0x01, 0x01],
+        ] {
+            assert!(is_read_command(read), "{read:02x?} is a read");
+        }
+        for write in [
+            &encode_output_set(Output::Speakers)[..],
+            &encode_output_set(Output::Headphones),
+            &encode_feature_set(Feature::Sbx, false),
+            &encode_set(0x96, 0x10, 0.25),
+            // `23 43 00` pads to the same bytes as `23 43`: Direct Mode off.
+            &encode_toggle_set(0x43, false),
+            &[0x23, 0x43],
+            &encode_output_target_set(2),
+            &encode_standby_set(true),
+            // A read id followed by data is not the read.
+            &[0x23, 0x4d, 0x01],
+            &[0x26, 0x01, 0x96, 0x08, 0x01],
+            &[0x5a, 0x2c, 0x05, 0x00, 0x02],
+            &[],
+        ] {
+            assert!(!is_read_command(write), "{write:02x?} is a write");
+        }
+    }
+
+    #[test]
+    fn a_read_is_answered_only_by_its_own_reply() {
+        let output = report(&[0x00, 0x23, 0x4d, 0x00, 0x01]);
+        assert!(answers_read(&[0x23, 0x4d], &output));
+        assert!(!answers_read(&[0x23, 0x24], &output));
+        let get = report(&[0x00, 0x26, 0x01, 0x00, 0x96, 0x08, 0x3f, 0x26, 0x66, 0x66]);
+        assert!(answers_read(&[0x26, 0x01, 0x96, 0x08], &get));
+        assert!(!answers_read(&[0x26, 0x01, 0x96, 0x0a], &get));
+        let target = report(&[0x00, 0x5a, 0x2c, 0x05, 0x01, 0x02, 0, 0, 0]);
+        assert!(answers_read(&[0x5a, 0x2c, 0x01, 0x01], &target));
+        // Knob, release, and a write never verify.
+        assert!(!answers_read(&[0x23, 0x4d], &report(&[0x01])));
+        assert!(!answers_read(&[0x23, 0x4d], &report(&[])));
+        assert!(!answers_read(
+            &[0x23, 0x4e, 0x01],
+            &report(&[0x00, 0x23, 0x4e, 0x00, 0x01])
+        ));
     }
 
     #[test]

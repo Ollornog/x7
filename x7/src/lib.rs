@@ -4,11 +4,14 @@
 //! `protocol` is pure encode/decode, `transport` is the hidraw device,
 //! `settings` is the parameter table, and the functions here tie them together.
 //! `fake` is an in-memory X7 for running clients without the device.
+//! `safety` and `log` are the safe mode and the traffic log of `transport`.
 
 pub mod error;
 pub mod fake;
+pub mod log;
 pub mod profile;
 pub mod protocol;
+pub mod safety;
 pub mod session;
 pub mod settings;
 pub mod transport;
