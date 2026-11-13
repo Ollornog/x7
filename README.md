@@ -1,4 +1,9 @@
-# Sound Blaster X7 on Linux
+# X7 Sound Blaster: the Sound Blaster X7 on Linux
+
+> **Fork.** This is a fork of [Stamrin/x7](https://github.com/Stamrin/x7).
+> It adds a safe mode (see [`docs/safety.md`](docs/safety.md)), the
+> speaker layouts with a subwoofer, profile rename and delete, and an
+> appearance choice; [`CHANGELOG.md`](CHANGELOG.md) lists the changes.
 
 > **How this was made.** The code was written with Claude (Opus 5.5 and
 > Fable 5.1) with a person at the keyboard directing, testing and
@@ -34,7 +39,7 @@ Two binaries, one library:
 One command fetches the latest release and installs it for your user:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Stamrin/x7/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Ollornog/x7-soundblaster/main/install.sh | sh
 ```
 
 Or download `x7-<version>-x86_64-linux.tar.gz` from the Releases page,
@@ -56,7 +61,7 @@ drawer, and whether the controls window floats. Flags answer them in
 advance, for scripts and agents (see [`AGENTS.md`](AGENTS.md)):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Stamrin/x7/main/install.sh | sh -s -- --bar=center-end --float
+curl -fsSL https://raw.githubusercontent.com/Ollornog/x7-soundblaster/main/install.sh | sh -s -- --bar=center-end --float
 ```
 
 `--bar=tray` and `--no-float` undo them. The answers are remembered, so

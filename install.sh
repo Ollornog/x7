@@ -13,7 +13,7 @@ set -eu
 main() {
 
   usage='usage: install.sh [--no-autostart] [--bar=center-end|tray] [--float|--no-float] [--uninstall]'
-  repo=${X7_REPO:-Stamrin/x7}
+  repo=${X7_REPO:-Ollornog/x7-soundblaster}
   releases_url=${X7_RELEASES_URL:-https://api.github.com/repos/$repo/releases/latest}
   udev_dir=${X7_UDEV_DIR:-/etc/udev/rules.d}
   rule=70-soundblaster-x7.rules

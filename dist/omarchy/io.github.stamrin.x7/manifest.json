@@ -6,7 +6,7 @@
   "author": "Stamrin",
   "license": "MIT",
   "description": "The Sound Blaster X7 in the Omarchy bar: the active output, and a popup with every control.",
-  "homepage": "https://github.com/Stamrin/x7",
+  "homepage": "https://github.com/Ollornog/x7-soundblaster",
   "kinds": [
     "bar-widget"
   ],

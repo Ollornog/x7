@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-13)
 
 ### Fixed
 - The window opened dark and turned light on the first click or drag on a
@@ -9,6 +9,13 @@
   asked before the first frame.
 - Selecting a profile in the window loaded it at once; it now only
   selects, and Load applies it.
+- The delete question ran past the window with a long profile name; it
+  now wraps on its own row with Delete and Cancel, and long names in the
+  list are shortened with an ellipsis.
+
+### Changed
+- The installer and the README fetch releases of this fork
+  (Ollornog/x7-soundblaster) instead of Stamrin/x7.
 
 ### Added
 - Profiles: `x7 profile list`, `x7 profile rename <old> <new>` (never
