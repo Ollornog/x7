@@ -354,7 +354,7 @@ Panel {
 
           ChoiceRow {
             label: "Layout"; group: "speakers"; name: "layout"
-            options: ["2.0", "4.0", "5.0", "5.1"]
+            options: ["2.0", "2.1", "3.0", "3.1", "4.0", "4.1", "5.0", "5.1"]
           }
           SwitchRow { label: "Front full-range"; group: "speakers"; name: "front-full-range" }
           SwitchRow { label: "Rear full-range"; group: "speakers"; name: "rear-full-range" }

@@ -434,12 +434,12 @@ mod tests {
 
     #[test]
     fn unmatched_choice_value_is_left_out() {
-        // A layout float the table does not list (a 2.1 set on Windows) is
+        // A layout float the table does not list (9.0, no such layout) is
         // shown by the CLI as a number but cannot be applied, so a profile
         // never contains it.
         let mut s = state();
         let l = settings::find("speakers", "layout").unwrap();
-        s.params.insert((l.hid_group, l.get_id), 2.0);
+        s.params.insert((l.hid_group, l.get_id), 9.0);
         let p = Profile::from_state(&s);
         assert!(
             !lines(&p).iter().any(|l| l.starts_with("layout")),

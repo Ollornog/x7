@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- Speaker layouts 2.1, 3.0, 3.1 and 4.1 (raw 2, 3, 4, 6: one plus subwoofer
+  plus two times center plus four times rear, as the macOS panel encodes it).
+  Only 2.0, 4.0, 5.0 and 5.1 were offered before, so a subwoofer could not be
+  switched on with a stereo pair.
 - Safe mode for every HID command (`docs/safety.md`): no command while a
   recording from the X7 is open or its ALSA card is missing; writes only
   after an answered read (the CLI reads `23 4d` first); a missing reply,
