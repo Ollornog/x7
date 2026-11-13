@@ -68,7 +68,19 @@ enum ProfileCmd {
     /// Read every setting from the device into a file
     Save { file: String },
     /// Apply every setting in a file to the device
-    Load { file: String },
+    Load {
+        file: String,
+        /// Apply high headphone gain or High Power Amplification if the
+        /// file has them (they can harm headphones under 600 ohm)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// List saved profiles
+    List,
+    /// Rename a saved profile; the new name must be free
+    Rename { from: String, to: String },
+    /// Delete a saved profile
+    Delete { name: String },
 }
 
 fn main() {
@@ -89,11 +101,50 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<(), Error> {
-    if let Cmd::Status = cli.cmd {
-        for (k, v) in x7::transport::status()? {
-            println!("{k:<10} {v}");
+    // Commands that never touch the device run before it is opened.
+    match &cli.cmd {
+        Cmd::Status => {
+            for (k, v) in x7::transport::status()? {
+                println!("{k:<10} {v}");
+            }
+            return Ok(());
         }
-        return Ok(());
+        Cmd::Profile {
+            action: ProfileCmd::List,
+        } => {
+            for name in x7::profile::list() {
+                println!("{name}");
+            }
+            return Ok(());
+        }
+        Cmd::Profile {
+            action: ProfileCmd::Rename { from, to },
+        } => {
+            x7::profile::rename(from, to)?;
+            println!("renamed {} to {}", from.trim(), to.trim());
+            return Ok(());
+        }
+        Cmd::Profile {
+            action: ProfileCmd::Delete { name },
+        } => {
+            x7::profile::delete(name)?;
+            println!("deleted {}", name.trim());
+            return Ok(());
+        }
+        Cmd::Profile {
+            action: ProfileCmd::Load { file, yes: false },
+        } => {
+            // Refuse before opening the device, so nothing is sent.
+            let risky = x7::profile::load(&profile_path(file)?)?.risky();
+            if !risky.is_empty() {
+                return Err(Error::Profile(format!(
+                    "{} sets {}, which can harm headphones under 600 ohm; add --yes to apply it",
+                    file,
+                    risky.join(", ")
+                )));
+            }
+        }
+        _ => {}
     }
     let mut dev = Device::open()?;
     match cli.cmd {
@@ -138,7 +189,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             println!("saved {} settings to {}", p.entries().len(), path.display());
         }
         Cmd::Profile {
-            action: ProfileCmd::Load { file },
+            action: ProfileCmd::Load { file, .. },
         } => {
             let p = x7::profile::load(&profile_path(&file)?)?;
             for e in p.entries() {
@@ -146,7 +197,10 @@ fn run(cli: Cli) -> Result<(), Error> {
                 println!("{}", e.line());
             }
         }
-        Cmd::Status => unreachable!("handled before the device is opened"),
+        Cmd::Status
+        | Cmd::Profile {
+            action: ProfileCmd::List | ProfileCmd::Rename { .. } | ProfileCmd::Delete { .. },
+        } => unreachable!("handled before the device is opened"),
         Cmd::Scout { state: Some(state) } => {
             let on = master_state(&state).ok_or_else(|| Error::UnknownValue {
                 name: "scout",

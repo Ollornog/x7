@@ -400,9 +400,102 @@ pub fn desktop_theme() -> Option<egui::Theme> {
 /// theme. Fill that from the portal; the preference itself stays
 /// `System`, so a desktop that does report a theme is still followed.
 pub fn apply_desktop_fallback(ctx: &egui::Context) {
-    if let Some(theme) = desktop_theme() {
+    apply_desktop_fallback_with(ctx, desktop_theme());
+}
+
+pub fn apply_desktop_fallback_with(ctx: &egui::Context, portal: Option<egui::Theme>) {
+    if let Some(theme) = portal {
         ctx.options_mut(|o| o.fallback_theme = theme);
     }
+}
+
+/// The user's choice in the window: follow the desktop, or always light or
+/// dark. Stored in `gui.toml` next to the profiles directory.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    pub const ALL: [Appearance; 3] = [Appearance::System, Appearance::Light, Appearance::Dark];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Appearance::System => "system",
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Appearance::System => "Desktop",
+            Appearance::Light => "Light",
+            Appearance::Dark => "Dark",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Appearance> {
+        Appearance::ALL
+            .into_iter()
+            .find(|a| a.name() == text.trim())
+    }
+}
+
+/// `$XDG_CONFIG_HOME/x7/gui.toml`, or `~/.config/x7/gui.toml`.
+pub fn gui_config_path() -> std::path::PathBuf {
+    let profiles = x7::profile::dir();
+    profiles
+        .parent()
+        .map_or_else(|| profiles.clone(), std::path::Path::to_path_buf)
+        .join("gui.toml")
+}
+
+/// The stored choice; `System` when the file or the key is missing or wrong.
+pub fn load_appearance(path: &std::path::Path) -> Appearance {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("appearance")?.as_str().and_then(Appearance::parse))
+        .unwrap_or_default()
+}
+
+pub fn save_appearance(path: &std::path::Path, a: Appearance) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, format!("appearance = \"{}\"\n", a.name()))?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Light or dark as chosen: pinned for `Light`/`Dark`; for `System` the
+/// theme winit reports, else the portal's answer as egui's fallback. On
+/// X11 winit reports none, so without the portal answer egui would show
+/// its own default (dark) until something else set the fallback.
+pub fn apply_appearance(ctx: &egui::Context, a: Appearance, portal: Option<egui::Theme>) {
+    if let Some(theme) = portal {
+        ctx.options_mut(|o| o.fallback_theme = theme);
+    }
+    match a {
+        Appearance::System => ctx.set_theme(egui::ThemePreference::System),
+        Appearance::Light => ctx.set_theme(egui::Theme::Light),
+        Appearance::Dark => ctx.set_theme(egui::Theme::Dark),
+    }
+    ctx.request_repaint();
+}
+
+/// Everything a new window needs before its first frame: fonts, both
+/// styles, and the theme it must open with. Asking the portal only on the
+/// first focus gain let a window that opened unfocused (from the tray)
+/// show egui's dark default and jump to the desktop's light theme when it
+/// was clicked or dragged.
+pub fn prepare(ctx: &egui::Context, a: Appearance, portal: Option<egui::Theme>) {
+    install(ctx);
+    apply_appearance(ctx, a, portal);
 }
 
 /// Longest the window waits for the settings portal on a focus gain.
@@ -469,6 +562,43 @@ mod tests {
         assert_eq!(current(&ctx), LIGHT);
         ctx.set_theme(egui::Theme::Dark);
         assert_eq!(current(&ctx), DARK);
+    }
+
+    #[test]
+    fn a_new_window_opens_in_the_desktop_theme_before_any_focus() {
+        // The case behind the light/dark jump: X11 reports no system theme,
+        // the portal says light, the window has not been focused yet.
+        let ctx = egui::Context::default();
+        prepare(&ctx, Appearance::System, Some(egui::Theme::Light));
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        let ctx = egui::Context::default();
+        prepare(&ctx, Appearance::System, Some(egui::Theme::Dark));
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+    }
+
+    #[test]
+    fn a_chosen_appearance_wins_over_the_desktop() {
+        let ctx = egui::Context::default();
+        prepare(&ctx, Appearance::Dark, Some(egui::Theme::Light));
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        // A later focus gain refreshes only the fallback; the choice holds.
+        apply_desktop_fallback_with(&ctx, Some(egui::Theme::Light));
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        apply_appearance(&ctx, Appearance::Light, None);
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+    }
+
+    #[test]
+    fn appearance_round_trips_through_its_file() {
+        let dir = std::env::temp_dir().join(format!("x7-gui-appearance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("gui.toml");
+        assert_eq!(load_appearance(&path), Appearance::System);
+        save_appearance(&path, Appearance::Dark).unwrap();
+        assert_eq!(load_appearance(&path), Appearance::Dark);
+        std::fs::write(&path, "appearance = \"purple\"\n").unwrap();
+        assert_eq!(load_appearance(&path), Appearance::System);
+        assert_eq!(Appearance::parse("light"), Some(Appearance::Light));
     }
 
     #[test]

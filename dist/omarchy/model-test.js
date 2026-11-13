@@ -44,6 +44,8 @@ assert.ok(script.startsWith("echo @output && "), script)
 assert.ok(script.endsWith(" eq preset"), script)
 
 assert.strictEqual(M.outputFromTooltip("X7: speakers"), "speakers")
+assert.strictEqual(M.outputFromTooltip("X7 Sound Blaster: headphones"), "headphones")
+assert.strictEqual(M.outputFromTooltip("X7 Sound Blaster: not answering, power-cycle it"), "")
 assert.strictEqual(M.outputFromTooltip("X7: not connected"), "")
 assert.strictEqual(M.outputFromTooltip(undefined), "")
 

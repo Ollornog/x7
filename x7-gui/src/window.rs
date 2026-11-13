@@ -312,6 +312,14 @@ pub struct Controls {
     profiles: Vec<String>,
     /// Commands waiting for the user's yes, see `Pending`.
     pending: Option<Pending>,
+    /// The profile clicked in the list; the actions below it apply to it.
+    profile_sel: Option<String>,
+    /// The new name typed for the selected profile.
+    profile_rename: String,
+    /// The profile whose Delete was clicked once; a second click deletes.
+    confirm_delete: Option<String>,
+    /// Light, dark or the desktop's choice; stored in `gui.toml`.
+    appearance: theme::Appearance,
 }
 
 impl Controls {
@@ -342,6 +350,10 @@ impl Controls {
             profile_error: None,
             profiles: Vec::new(),
             pending: None,
+            profile_sel: None,
+            profile_rename: String::new(),
+            confirm_delete: None,
+            appearance: theme::load_appearance(&theme::gui_config_path()),
         }
     }
 
@@ -1144,10 +1156,19 @@ impl Controls {
         if self.profiles.is_empty() {
             ui.label(egui::RichText::new("No saved profiles yet").color(p.text_weak));
         }
+        // A click selects; Load, Rename and Delete act on the selection, so
+        // picking a profile to rename or delete never applies it.
         let mut load: Option<String> = None;
+        let mut select: Option<String> = None;
         for name in &self.profiles {
-            let selected = self.profile_pick.as_deref() == Some(name.as_str());
-            let text = egui::RichText::new(name).color(if selected { p.accent } else { p.text });
+            let selected = self.profile_sel.as_deref() == Some(name.as_str());
+            let loaded = self.profile_pick.as_deref() == Some(name.as_str());
+            let shown = if loaded {
+                format!("{name}  (loaded)")
+            } else {
+                name.clone()
+            };
+            let text = egui::RichText::new(shown).color(if selected { p.accent } else { p.text });
             let b = egui::Button::new(text)
                 .fill(if selected {
                     p.raised
@@ -1157,8 +1178,72 @@ impl Controls {
                 .stroke(Stroke::NONE)
                 .min_size(Vec2::new(ui.available_width(), ROW_H));
             if ui.add(b).clicked() {
-                load = Some(name.clone());
+                select = Some(name.clone());
             }
+        }
+        if let Some(name) = select {
+            if self.profile_sel.as_deref() != Some(name.as_str()) {
+                self.profile_rename.clear();
+                self.confirm_delete = None;
+            }
+            self.profile_sel = Some(name);
+        }
+        if let Some(picked) = self
+            .profile_sel
+            .clone()
+            .filter(|n| self.profiles.contains(n))
+        {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Load").clicked() {
+                    load = Some(picked.clone());
+                }
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.profile_rename)
+                        .hint_text(format!("Rename {picked} to"))
+                        .desired_width(ui.available_width() - 150.0),
+                );
+                let to = self.profile_rename.trim().to_owned();
+                if ui
+                    .add_enabled(!to.is_empty(), egui::Button::new("Rename"))
+                    .clicked()
+                {
+                    self.profile_error = match profile::rename(&picked, &to) {
+                        Ok(()) => {
+                            if self.profile_pick.as_deref() == Some(picked.as_str()) {
+                                self.profile_pick = Some(to.clone());
+                            }
+                            self.profile_sel = Some(to);
+                            self.profile_rename.clear();
+                            self.confirm_delete = None;
+                            self.nav.profiles_stale = true;
+                            None
+                        }
+                        Err(e) => Some(e.to_string()),
+                    };
+                }
+                let armed = self.confirm_delete.as_deref() == Some(picked.as_str());
+                let label = if armed { "Really delete" } else { "Delete" };
+                let text = egui::RichText::new(label).color(if armed { p.warning } else { p.text });
+                if ui.button(text).clicked() {
+                    if armed {
+                        self.profile_error = match profile::delete(&picked) {
+                            Ok(()) => {
+                                if self.profile_pick.as_deref() == Some(picked.as_str()) {
+                                    self.profile_pick = None;
+                                }
+                                self.profile_sel = None;
+                                self.nav.profiles_stale = true;
+                                None
+                            }
+                            Err(e) => Some(e.to_string()),
+                        };
+                        self.confirm_delete = None;
+                    } else {
+                        self.confirm_delete = Some(picked.clone());
+                    }
+                }
+            });
         }
         if let Some(name) = load {
             self.profile_error =
@@ -1207,6 +1292,7 @@ impl Controls {
                     .and_then(|path| profile::save(&path, &Profile::from_state(s)))
                 {
                     Ok(()) => {
+                        self.profile_sel = Some(name.clone());
                         self.profile_pick = Some(name);
                         self.profile_name.clear();
                         self.nav.profiles_stale = true;
@@ -1220,6 +1306,32 @@ impl Controls {
             ui.add_space(6.0);
             ui.label(egui::RichText::new(e).small().color(p.warning));
         }
+        ui.add_space(10.0);
+        let r = ui.available_rect_before_wrap();
+        ui.painter()
+            .hline(r.x_range(), r.top(), Stroke::new(1.0, p.line));
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Appearance").color(p.text_weak));
+            for a in theme::Appearance::ALL {
+                if ui
+                    .selectable_label(self.appearance == a, a.label())
+                    .clicked()
+                    && self.appearance != a
+                {
+                    self.appearance = a;
+                    let portal = if a == theme::Appearance::System {
+                        theme::desktop_theme()
+                    } else {
+                        None
+                    };
+                    theme::apply_appearance(ui.ctx(), a, portal);
+                    if let Err(e) = theme::save_appearance(&theme::gui_config_path(), a) {
+                        self.profile_error = Some(format!("appearance not saved: {e}"));
+                    }
+                }
+            }
+        });
     }
 
     fn page_area(&mut self, ui: &mut egui::Ui, s: &State, p: &Palette) {
@@ -1283,6 +1395,11 @@ impl eframe::App for Controls {
                     }
                     None => false,
                 };
+                // An Omarchy theme pins egui's slot; a light or dark choice
+                // made in this window still wins.
+                if applied && self.appearance != theme::Appearance::System {
+                    theme::apply_appearance(&ctx, self.appearance, None);
+                }
                 // `root` took its style before this frame began; the panels
                 // below inherit it, so give it the style just installed or
                 // this frame draws new fills under old text colours.

@@ -199,7 +199,14 @@ The window has six pages:
   subwoofer gain, output target, auto standby.
 - CrystalVoice: the master switch, echo cancellation, noise reduction,
   Focus with its angle, and the mic Smart Volume.
-- Profiles: save the current settings under a name and load one back.
+- Profiles: save the current settings under a name; select a saved
+  profile to load, rename or delete it (delete asks twice). Loading one
+  with High headphone gain or High Power Amplification asks first. The
+  Appearance row follows the desktop's light or dark preference, or keeps
+  the window light or dark (`~/.config/x7/gui.toml`).
+
+The window, the tray and the launcher show the name "X7 Sound Blaster";
+the commands stay `x7` and `x7-gui`.
 
 The CLI covers the same settings. Every group lists its current values
 when called bare, and sets one when given a name and a value:
@@ -212,11 +219,14 @@ x7 sbx crystalizer-level 0.5
 x7 eq preset rock
 x7 eq 125hz -2
 x7 headphones gain high
-x7 speakers layout 2.0
+x7 speakers layout 2.1          # 2.0, 2.1, 3.0, 3.1, 4.0, 4.1, 5.0, 5.1
 x7 voice noise-reduction on
 x7 scout on
 x7 profile save evening        # ~/.config/x7/profiles/evening.toml
-x7 profile load evening
+x7 profile load evening        # --yes to apply high gain or high power
+x7 profile list
+x7 profile rename evening night  # never overwrites
+x7 profile delete night
 x7 status                      # safe-mode state; sends nothing
 ```
 

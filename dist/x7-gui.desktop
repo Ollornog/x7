@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Sound Blaster X7
+Name=X7 Sound Blaster
 Comment=Output, SBX and CrystalVoice controls for the Creative Sound Blaster X7
 Exec=x7-gui
 Icon=audio-headphones
