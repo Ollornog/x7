@@ -245,6 +245,12 @@ fn asks_for(commands: &[Command], s: &State) -> Vec<Confirm> {
     asks
 }
 
+/// The question under the profile list before a delete; wrapped by the
+/// caller, so a long name stays inside the window.
+fn delete_prompt(name: &str) -> String {
+    format!("Delete the profile \u{201c}{name}\u{201d}? This cannot be undone.")
+}
+
 /// The word beside the status dot at the rail's foot.
 fn status_word(link: Link, error: Option<&str>) -> &'static str {
     match (link, error) {
@@ -1170,6 +1176,7 @@ impl Controls {
             };
             let text = egui::RichText::new(shown).color(if selected { p.accent } else { p.text });
             let b = egui::Button::new(text)
+                .truncate()
                 .fill(if selected {
                     p.raised
                 } else {
@@ -1193,15 +1200,49 @@ impl Controls {
             .clone()
             .filter(|n| self.profiles.contains(n))
         {
+            // Three short rows, each sized to the page, so nothing runs past
+            // the window at its smallest width or with a long profile name.
             ui.add_space(6.0);
+            let armed = self.confirm_delete.as_deref() == Some(picked.as_str());
             ui.horizontal(|ui| {
                 if ui.button("Load").clicked() {
                     load = Some(picked.clone());
                 }
+                if !armed && ui.button("Delete").clicked() {
+                    self.confirm_delete = Some(picked.clone());
+                }
+            });
+            if armed {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(delete_prompt(&picked)).color(p.warning))
+                        .wrap(),
+                );
+                ui.horizontal(|ui| {
+                    let yes = egui::RichText::new("Delete").color(p.warning);
+                    if ui.button(yes).clicked() {
+                        self.profile_error = match profile::delete(&picked) {
+                            Ok(()) => {
+                                if self.profile_pick.as_deref() == Some(picked.as_str()) {
+                                    self.profile_pick = None;
+                                }
+                                self.profile_sel = None;
+                                self.nav.profiles_stale = true;
+                                None
+                            }
+                            Err(e) => Some(e.to_string()),
+                        };
+                        self.confirm_delete = None;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.confirm_delete = None;
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.profile_rename)
-                        .hint_text(format!("Rename {picked} to"))
-                        .desired_width(ui.available_width() - 150.0),
+                        .hint_text("New name")
+                        .desired_width((ui.available_width() - 80.0).max(60.0)),
                 );
                 let to = self.profile_rename.trim().to_owned();
                 if ui
@@ -1221,27 +1262,6 @@ impl Controls {
                         }
                         Err(e) => Some(e.to_string()),
                     };
-                }
-                let armed = self.confirm_delete.as_deref() == Some(picked.as_str());
-                let label = if armed { "Really delete" } else { "Delete" };
-                let text = egui::RichText::new(label).color(if armed { p.warning } else { p.text });
-                if ui.button(text).clicked() {
-                    if armed {
-                        self.profile_error = match profile::delete(&picked) {
-                            Ok(()) => {
-                                if self.profile_pick.as_deref() == Some(picked.as_str()) {
-                                    self.profile_pick = None;
-                                }
-                                self.profile_sel = None;
-                                self.nav.profiles_stale = true;
-                                None
-                            }
-                            Err(e) => Some(e.to_string()),
-                        };
-                        self.confirm_delete = None;
-                    } else {
-                        self.confirm_delete = Some(picked.clone());
-                    }
                 }
             });
         }
@@ -1564,6 +1584,15 @@ mod tests {
         }
         assert!(Confirm::HighGain.text().contains("600 ohms"));
         assert!(Confirm::HighPower.text().contains("power adapter"));
+    }
+
+    #[test]
+    fn the_delete_prompt_names_the_profile() {
+        let t = delete_prompt("evening");
+        assert!(
+            t.contains("evening") && t.ends_with("cannot be undone."),
+            "{t}"
+        );
     }
 
     #[test]

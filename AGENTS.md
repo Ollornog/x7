@@ -20,7 +20,7 @@ skipped. Ask the person first, then pass the answers as flags.
 2. Run it with those flags:
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/Stamrin/x7/main/install.sh -o install.sh
+   curl -fsSL https://raw.githubusercontent.com/Ollornog/x7-soundblaster/main/install.sh -o install.sh
    sh install.sh --bar=center-end --float </dev/null
    ```
 
