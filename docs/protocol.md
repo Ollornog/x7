@@ -132,6 +132,9 @@ Speaker configuration changes (`23 4e`) are followed by a complete re-run of
 the app-launch init sequence, then a float set in **group 0x80**, set id 08:
 1.0 = 2.0, 5.0 = 4.0, 7.0 = 5.0, 8.0 = 5.1 (the `SpeakerAdvancedConfiguration`
 enum from the Bluetooth notes, 2.0=1 ... 5.1=8).
+The value is `1 + subwoofer + 2 x center + 4 x rear`, so 2.0 = 2.1,
+3.0 = 3.0, 4.0 = 3.1 and 6.0 = 4.1 as well (alcatron/mb-x7-control
+`PROTOCOL.md`, section 3).
 
 Bass management (group 0x96): set id 2a = Bass Redirection enable, 2c =
 bass-management crossover Hz (default 80), 3c = Subwoofer Gain enable,

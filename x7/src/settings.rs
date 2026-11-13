@@ -131,7 +131,19 @@ pub static PARAMS: &[Param] = &[
         0x80,
         0x04,
         0x08,
-        Kind::Choice(&[("2.0", 1.0), ("4.0", 5.0), ("5.0", 7.0), ("5.1", 8.0)]),
+        // 1 + subwoofer + 2 x center + 4 x rear (the macOS panel's
+        // SpeakerAdvancedConfiguration, alcatron/mb-x7-control PROTOCOL.md
+        // section 3). The Windows captures showed 1, 5, 7 and 8.
+        Kind::Choice(&[
+            ("2.0", 1.0),
+            ("2.1", 2.0),
+            ("3.0", 3.0),
+            ("3.1", 4.0),
+            ("4.0", 5.0),
+            ("4.1", 6.0),
+            ("5.0", 7.0),
+            ("5.1", 8.0),
+        ]),
     ),
     row("speakers", "front-full-range", 0x96, 0x1a, 0x34, FULL_RANGE),
     row("speakers", "rear-full-range", 0x96, 0x1b, 0x36, FULL_RANGE),
@@ -852,10 +864,16 @@ mod tests {
         assert_eq!(in_group("speakers").count(), 6);
         let l = p("speakers", "layout");
         assert_eq!((l.hid_group, l.get_id, l.set_id), (0x80, 0x04, 0x08));
-        assert_eq!(l.parse("5.1").unwrap(), Value::Enum(3));
-        assert_eq!(l.to_raw(&Value::Enum(1)), 5.0);
-        assert_eq!(l.from_raw(7.0), Value::Enum(2));
+        assert_eq!(l.parse("5.1").unwrap(), Value::Enum(7));
+        assert_eq!(l.to_raw(&Value::Enum(4)), 5.0);
+        assert_eq!(l.from_raw(7.0), Value::Enum(6));
         assert_eq!(l.format(&Value::Enum(0)), "2.0");
+        // 2.1 is raw 2.0: one front pair plus the subwoofer.
+        assert_eq!(l.to_raw(&l.parse("2.1").unwrap()), 2.0);
+        assert_eq!(l.format(&l.from_raw(2.0)), "2.1");
+        for (name, raw) in [("3.0", 3.0), ("3.1", 4.0), ("4.1", 6.0)] {
+            assert_eq!(l.to_raw(&l.parse(name).unwrap()), raw, "{name}");
+        }
         // Raw 1.0 is the unticked Full-Range box (04b: "Front Full-Range off").
         let f = p("speakers", "front-full-range");
         assert_eq!((f.get_id, f.set_id), (0x1a, 0x34));
