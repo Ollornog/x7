@@ -234,10 +234,11 @@ fn master_state(text: &str) -> Option<bool> {
     }
 }
 
-/// A bare name is a profile in the shared directory; anything with a `/`
-/// or a `.` is a path as typed.
+/// A name is a profile in the shared directory, dots and spaces included
+/// (`subwoofer-2.1-80hz`). A path has a `/` or ends in `.toml`
+/// (`./mine.toml`, `mine.toml`) and is used as typed.
 fn profile_path(file: &str) -> Result<std::path::PathBuf, Error> {
-    if file.contains('/') || file.contains('.') {
+    if file.contains('/') || file.trim_end().ends_with(".toml") {
         Ok(std::path::PathBuf::from(file))
     } else {
         x7::profile::path_for(file)
@@ -371,6 +372,16 @@ mod tests {
                 .ends_with("x7/profiles/gaming.toml")
         );
         assert!(profile_path("").is_err());
+        // A dot alone no longer makes a path: the name keeps its dots.
+        assert!(
+            profile_path("subwoofer-2.1-80hz")
+                .unwrap()
+                .ends_with("x7/profiles/subwoofer-2.1-80hz.toml")
+        );
+        assert_eq!(
+            profile_path("mine.toml").unwrap(),
+            std::path::PathBuf::from("mine.toml")
+        );
     }
 
     #[test]

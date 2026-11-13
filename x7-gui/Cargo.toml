@@ -1,6 +1,6 @@
 [package]
 name = "x7-gui"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Tray icon and control window for the Sound Blaster X7"
 license = "MIT"

@@ -276,18 +276,32 @@ pub fn dir() -> PathBuf {
     base.join("x7").join("profiles")
 }
 
-/// The file for a profile name inside `dir()`. A name is one path component
-/// without dots, so the CLI can tell a name from a path: no separators, no
-/// `.`, not empty.
+/// The file for a profile name inside `dir()`: `<name>.toml`. Dots and
+/// spaces are fine (`subwoofer-2.1-80hz`, `living room`); see `check_name`
+/// for what is not.
 pub fn path_for(name: &str) -> Result<PathBuf, Error> {
     path_in(&dir(), name)
 }
 
-fn path_in(dir: &Path, name: &str) -> Result<PathBuf, Error> {
+/// A name is the trimmed text, and it must stay one file inside the
+/// profiles directory: not empty, no `/` or `\\`, no control characters,
+/// no leading `.` (that would be `.`, `..` or a hidden file), and no
+/// `.toml` ending, which the CLI takes as a file path.
+pub fn check_name(name: &str) -> Result<&str, Error> {
     let name = name.trim();
-    if name.is_empty() || name.contains(['/', '\\', '.']) {
+    let bad = name.is_empty()
+        || name.contains(['/', '\\'])
+        || name.chars().any(char::is_control)
+        || name.starts_with('.')
+        || name.ends_with(".toml");
+    if bad {
         return Err(Error::Profile(format!("'{name}' is not a profile name")));
     }
+    Ok(name)
+}
+
+fn path_in(dir: &Path, name: &str) -> Result<PathBuf, Error> {
+    let name = check_name(name)?;
     Ok(dir.join(format!("{name}.toml")))
 }
 
@@ -338,8 +352,8 @@ pub fn list() -> Vec<String> {
     list_in(&dir())
 }
 
-/// Names `load` accepts: `*.toml` stems that `path_for` resolves, so a
-/// hand-placed `my.v2.toml` is not offered and then refused.
+/// Names `load` accepts: `*.toml` stems that `path_for` resolves to the same
+/// file, so a hand-placed `.hidden.toml` is not offered and then refused.
 fn list_in(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
         .map(|entries| {
@@ -520,8 +534,9 @@ mod tests {
         );
         assert!(rename_in(&d, "missing", "x").is_err());
         assert!(rename_in(&d, "night", "../escape").is_err());
-        assert!(rename_in(&d, "night", "a.b").is_err());
-        assert_eq!(list_in(&d), ["keep", "night"]);
+        rename_in(&d, "night", "subwoofer-2.1-80hz").unwrap();
+        assert!(rename_in(&d, "subwoofer-2.1-80hz", "..").is_err());
+        assert_eq!(list_in(&d), ["keep", "subwoofer-2.1-80hz"]);
     }
 
     #[test]
@@ -634,14 +649,43 @@ mod tests {
                 .ends_with("x7/profiles/gaming.toml")
         );
         assert!(path_for("../etc").is_err());
+        assert!(path_for("..").is_err());
+        assert!(path_for(".").is_err());
         assert!(path_for(".hidden").is_err());
-        assert!(
-            path_for("preset.v2").is_err(),
-            "a dot would make the CLI read it as a path"
-        );
         assert!(path_for("a/b").is_err());
+        assert!(path_for("a\\b").is_err());
+        assert!(path_for("tab\there").is_err());
+        assert!(
+            path_for("evening.toml").is_err(),
+            "the CLI reads it as a path"
+        );
         assert!(path_for("").is_err());
         assert!(path_for("  ").is_err());
+    }
+
+    #[test]
+    fn names_may_have_dots_and_spaces() {
+        assert!(
+            path_for("subwoofer-2.1-80hz")
+                .unwrap()
+                .ends_with("x7/profiles/subwoofer-2.1-80hz.toml")
+        );
+        assert!(
+            path_for(" living room ")
+                .unwrap()
+                .ends_with("x7/profiles/living room.toml")
+        );
+        assert!(
+            path_for("a..b").is_ok(),
+            "two dots inside a name are no path part"
+        );
+        // The names saved before this change still resolve.
+        for old in ["ByDaniel", "subwoofer-2_1-80hz", "vor-subwoofer-20261113"] {
+            assert!(
+                path_for(old).unwrap().ends_with(format!("{old}.toml")),
+                "{old}"
+            );
+        }
     }
 
     #[test]
@@ -686,15 +730,22 @@ mod tests {
     fn list_leaves_out_names_load_would_refuse() {
         let dir = std::env::temp_dir().join(format!("x7-profiles-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for f in ["desk.toml", "my.v2.toml", "notes.txt", " desk.toml"] {
+        for f in [
+            "desk.toml",
+            "subwoofer-2.1-80hz.toml",
+            "living room.toml",
+            ".hidden.toml",
+            "notes.txt",
+            " desk.toml",
+        ] {
             std::fs::write(dir.join(f), "").unwrap();
         }
         let names = list_in(&dir);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(
             names,
-            vec!["desk".to_owned()],
-            "a dotted stem fails path_for; a padded stem would load another file"
+            ["desk", "living room", "subwoofer-2.1-80hz"],
+            "dots and spaces are names; a hidden or a padded stem would load another file"
         );
     }
 }

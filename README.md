@@ -235,8 +235,9 @@ x7 profile delete night
 x7 status                      # safe-mode state; sends nothing
 ```
 
-Profiles are TOML files in `~/.config/x7/profiles/`; a profile name with
-a `/` or a `.` in it is taken as a path instead.
+Profiles are TOML files in `~/.config/x7/profiles/`. A name may hold dots
+and spaces (`x7 profile save "subwoofer-2.1-80hz"`); an argument with a `/`
+or ending in `.toml` is taken as a file path instead.
 
 Mixer settings such as mic monitoring are not reachable from userspace;
 see "UAC (mixer) from userspace" in [`docs/protocol.md`](docs/protocol.md).
