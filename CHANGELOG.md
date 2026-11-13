@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1 (2026-11-13)
+
+### Fixed
+- A profile name with a dot (`subwoofer-2.1-80hz`) was taken as a file
+  path by the CLI and was missing from the list in the window. Names now
+  may hold dots and spaces; a name may not be empty, hold `/` or `\`,
+  start with `.` (no `.`, `..` or hidden files) or end in `.toml`. The CLI
+  takes an argument with a `/` or a `.toml` ending as a path. Existing
+  profiles keep their names.
+
 ## 0.2.0 (2026-11-13)
 
 ### Fixed
