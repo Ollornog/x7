@@ -46,7 +46,8 @@ function command(x7, group, name, value) {
   return [x7, group, name, String(value)]
 }
 
-// The tray tooltip reads "X7: headphones"; used for the bar icon before the
+// The tray tooltip reads "X7 Sound Blaster: headphones" (older releases
+// "X7: headphones"); used for the bar icon before the
 // panel has read the device.
 function outputFromTooltip(text) {
   var m = /:\s*(headphones|speakers)\b/i.exec(String(text || ""))

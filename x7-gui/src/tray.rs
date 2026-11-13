@@ -49,7 +49,7 @@ impl ksni::Tray for X7Tray {
     }
 
     fn title(&self) -> String {
-        "Sound Blaster X7".into()
+        crate::APP_NAME.into()
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -59,15 +59,15 @@ impl ksni::Tray for X7Tray {
     fn tool_tip(&self) -> ksni::ToolTip {
         let s = self.session.state();
         let text = match (s.link, s.output) {
-            (Link::Absent, _) => "X7: not connected".to_owned(),
-            (Link::Connecting, _) => "X7: connecting".to_owned(),
-            (Link::Unresponsive, _) => "X7: not answering, power-cycle it".to_owned(),
-            (Link::Ready, Some(Output::Headphones)) => "X7: headphones".to_owned(),
-            (Link::Ready, Some(Output::Speakers)) => "X7: speakers".to_owned(),
-            (Link::Ready, None) => "X7".to_owned(),
+            (Link::Absent, _) => "not connected",
+            (Link::Connecting, _) => "connecting",
+            (Link::Unresponsive, _) => "not answering, power-cycle it",
+            (Link::Ready, Some(Output::Headphones)) => "headphones",
+            (Link::Ready, Some(Output::Speakers)) => "speakers",
+            (Link::Ready, None) => "connected",
         };
         ksni::ToolTip {
-            title: text,
+            title: format!("{}: {text}", crate::APP_NAME),
             ..Default::default()
         }
     }

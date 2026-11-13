@@ -71,6 +71,11 @@ fn start_session(mode: Mode, on_change: Box<dyn Fn() + Send>) -> Session {
     }
 }
 
+/// The name the window, the tray and the launcher show. The binaries, the
+/// SNI id (`x7`) and the app id (`x7-gui`) keep their names: installed
+/// autostart entries, the udev rule and the Omarchy widget refer to them.
+pub const APP_NAME: &str = "X7 Sound Blaster";
+
 fn main() -> eframe::Result {
     let (mode, autostart) = match parse_args(std::env::args().skip(1)) {
         Ok(Launch::Run { mode, autostart }) => (mode, autostart),
@@ -181,7 +186,11 @@ fn main() -> eframe::Result {
             let wake = wake.clone();
             Box::new(move |cc| {
                 let ctx = cc.egui_ctx.clone();
-                theme::install(&ctx);
+                theme::prepare(
+                    &ctx,
+                    theme::load_appearance(&theme::gui_config_path()),
+                    theme::desktop_theme(),
+                );
                 wake.opened(&ctx);
                 Ok(Box::new(window::Controls::new(
                     session, quit, tray_ok, wake,
@@ -204,7 +213,7 @@ fn main() -> eframe::Result {
 fn window_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Sound Blaster X7")
+            .with_title(APP_NAME)
             .with_app_id("x7-gui")
             .with_inner_size([440.0, 540.0])
             .with_min_inner_size([440.0, 480.0]),

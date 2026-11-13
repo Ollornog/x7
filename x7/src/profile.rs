@@ -95,6 +95,25 @@ impl Profile {
         &self.entries
     }
 
+    /// Lines of entries that can harm headphones when applied unasked:
+    /// High headphone gain (600 ohm only) and High Power Amplification on.
+    /// The GUI asks before applying them; `x7 profile load` needs `--yes`.
+    pub fn risky(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|e| match e {
+                Entry::Switch(s, v) => {
+                    matches!(
+                        (s.group, s.name),
+                        ("headphones", "gain") | ("headphones", "high-power-amp")
+                    ) && s.to_raw(v) != 0.0
+                }
+                _ => false,
+            })
+            .map(Entry::line)
+            .collect()
+    }
+
     /// Every row the state knows a value for; rows still unknown are skipped,
     /// as is a `Choice` row whose device value matches no name.
     pub fn from_state(state: &State) -> Profile {
@@ -261,11 +280,57 @@ pub fn dir() -> PathBuf {
 /// without dots, so the CLI can tell a name from a path: no separators, no
 /// `.`, not empty.
 pub fn path_for(name: &str) -> Result<PathBuf, Error> {
+    path_in(&dir(), name)
+}
+
+fn path_in(dir: &Path, name: &str) -> Result<PathBuf, Error> {
     let name = name.trim();
     if name.is_empty() || name.contains(['/', '\\', '.']) {
         return Err(Error::Profile(format!("'{name}' is not a profile name")));
     }
-    Ok(dir().join(format!("{name}.toml")))
+    Ok(dir.join(format!("{name}.toml")))
+}
+
+/// Give a saved profile a new name. Never overwrites: the new name must be
+/// free.
+pub fn rename(from: &str, to: &str) -> Result<(), Error> {
+    rename_in(&dir(), from, to)
+}
+
+fn rename_in(dir: &Path, from: &str, to: &str) -> Result<(), Error> {
+    let src = path_in(dir, from)?;
+    let dst = path_in(dir, to)?;
+    if !src.is_file() {
+        return Err(Error::Profile(format!(
+            "no profile named '{}'",
+            from.trim()
+        )));
+    }
+    if dst.exists() {
+        return Err(Error::Profile(format!(
+            "a profile named '{}' exists already",
+            to.trim()
+        )));
+    }
+    fs::rename(&src, &dst)?;
+    Ok(())
+}
+
+/// Delete a saved profile by name. Only files in the profiles directory.
+pub fn delete(name: &str) -> Result<(), Error> {
+    delete_in(&dir(), name)
+}
+
+fn delete_in(dir: &Path, name: &str) -> Result<(), Error> {
+    let path = path_in(dir, name)?;
+    if !path.is_file() {
+        return Err(Error::Profile(format!(
+            "no profile named '{}'",
+            name.trim()
+        )));
+    }
+    fs::remove_file(&path)?;
+    Ok(())
 }
 
 /// Saved profile names, sorted.
@@ -430,6 +495,82 @@ mod tests {
         assert!(matches!(e, Error::UnknownValue { .. }), "{e}");
         let e = Profile::parse("not toml at all = = =\n").unwrap_err();
         assert!(matches!(e, Error::Profile(_)), "{e}");
+    }
+
+    fn tmp_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("x7-profiles-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn rename_moves_a_profile_and_never_overwrites() {
+        let d = tmp_dir("rename");
+        fs::write(d.join("evening.toml"), "[eq]\nenabled = true\n").unwrap();
+        fs::write(d.join("keep.toml"), "[eq]\nenabled = false\n").unwrap();
+        rename_in(&d, "evening", "night").unwrap();
+        assert_eq!(list_in(&d), ["keep", "night"]);
+        let e = rename_in(&d, "night", "keep").unwrap_err();
+        assert!(e.to_string().contains("exists already"), "{e}");
+        assert_eq!(
+            fs::read_to_string(d.join("keep.toml")).unwrap(),
+            "[eq]\nenabled = false\n",
+            "the existing profile is untouched"
+        );
+        assert!(rename_in(&d, "missing", "x").is_err());
+        assert!(rename_in(&d, "night", "../escape").is_err());
+        assert!(rename_in(&d, "night", "a.b").is_err());
+        assert_eq!(list_in(&d), ["keep", "night"]);
+    }
+
+    #[test]
+    fn delete_removes_only_the_named_profile() {
+        let d = tmp_dir("delete");
+        fs::write(d.join("a.toml"), "").unwrap();
+        fs::write(d.join("b.toml"), "").unwrap();
+        delete_in(&d, "a").unwrap();
+        assert_eq!(list_in(&d), ["b"]);
+        assert!(delete_in(&d, "a").is_err(), "gone already");
+        assert!(delete_in(&d, "../b").is_err());
+        assert_eq!(list_in(&d), ["b"]);
+    }
+
+    #[test]
+    fn risky_lists_high_gain_and_high_power_only() {
+        let p = Profile::parse(
+            "[headphones]\ngain = \"high\"\nhigh-power-amp = true\ndirect-mode = true\n",
+        )
+        .unwrap();
+        assert_eq!(p.risky(), ["gain high", "high-power-amp on"]);
+        let p =
+            Profile::parse("[headphones]\ngain = \"normal\"\nhigh-power-amp = false\n").unwrap();
+        assert!(p.risky().is_empty());
+    }
+
+    /// Load another profile, then the first one again, over the CLI path
+    /// against the in-memory X7: every value comes back. A profile holds
+    /// only settings the device accepts back, nothing one-way.
+    #[test]
+    fn loading_a_profile_and_loading_back_restores_every_value() {
+        let mut dev = crate::fake::device();
+        let before = Profile::read_device(&mut dev).unwrap();
+        let other = Profile::parse(
+            "[sbx]\nenabled = true\nsurround = true\nsurround-level = 0.3\n\
+             [eq]\nenabled = false\n31hz = -4.0\n\
+             [speakers]\nlayout = \"2.1\"\ncrossover = 80.0\noutput-target = \"line-and-amp\"\n",
+        )
+        .unwrap();
+        for e in other.entries() {
+            e.apply(&mut dev).unwrap();
+        }
+        let changed = Profile::read_device(&mut dev).unwrap();
+        assert_ne!(changed.to_toml(), before.to_toml());
+        for e in before.entries() {
+            e.apply(&mut dev).unwrap();
+        }
+        let after = Profile::read_device(&mut dev).unwrap();
+        assert_eq!(after.to_toml(), before.to_toml());
     }
 
     #[test]

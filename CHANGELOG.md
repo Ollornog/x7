@@ -2,7 +2,22 @@
 
 ## Unreleased
 
+### Fixed
+- The window opened dark and turned light on the first click or drag on a
+  light X11 desktop: the desktop's color scheme was asked only on focus
+  gain, so an unfocused new window showed egui's dark default. It is now
+  asked before the first frame.
+- Selecting a profile in the window loaded it at once; it now only
+  selects, and Load applies it.
+
 ### Added
+- Profiles: `x7 profile list`, `x7 profile rename <old> <new>` (never
+  overwrites) and `x7 profile delete <name>`; Rename and Delete in the
+  window. `x7 profile load` refuses a file with High headphone gain or
+  High Power Amplification without `--yes`, as the window asks first.
+- Appearance choice in the window: Desktop, Light or Dark.
+- Display name "X7 Sound Blaster" for the window, the tray and the
+  launcher. Binaries, SNI id and app id are unchanged.
 - Speaker layouts 2.1, 3.0, 3.1 and 4.1 (raw 2, 3, 4, 6: one plus subwoofer
   plus two times center plus four times rear, as the macOS panel encodes it).
   Only 2.0, 4.0, 5.0 and 5.1 were offered before, so a subwoofer could not be
